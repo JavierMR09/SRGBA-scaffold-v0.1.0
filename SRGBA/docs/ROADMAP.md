@@ -22,16 +22,16 @@
 - [x] Exceptions and interrupt entry
 - [x] Instruction-vector test harness
 
-## M2 - GBA bus and boot (next)
+## M2 - GBA bus and boot (complete)
 
-- [ ] BIOS, EWRAM, IWRAM, IO, palette, VRAM, OAM, and Game Pak regions
-- [ ] Mirroring, access width, alignment, and open-bus behavior
-- [ ] WAITCNT and sequential/non-sequential Game Pak timing
-- [ ] User-supplied BIOS loading and validation
-- [ ] Post-BIOS development boot path
-- [ ] First CPU-focused homebrew test ROM
+- [x] BIOS, EWRAM, IWRAM, IO, palette, VRAM, OAM, and Game Pak regions
+- [x] Mirroring, access width, alignment, and open-bus behavior
+- [x] WAITCNT and sequential/non-sequential Game Pak timing
+- [x] User-supplied BIOS loading and validation
+- [x] Post-BIOS development boot path
+- [x] First CPU-focused homebrew test ROM
 
-## M3 - Scheduling and basic video
+## M3 - Scheduling and basic video (next)
 
 - [ ] Master-cycle scheduler
 - [ ] Scanline, HBlank, VBlank, and VCount timing

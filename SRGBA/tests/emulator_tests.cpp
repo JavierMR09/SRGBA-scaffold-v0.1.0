@@ -5,7 +5,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 TEST_CASE("The emulator starts without a cartridge", "[emulator]") {
     const srgba::core::Emulator emulator;
@@ -51,4 +54,56 @@ TEST_CASE("A failed load preserves an empty emulator", "[emulator]") {
     REQUIRE_FALSE(error.empty());
     REQUIRE_FALSE(emulator.has_rom());
     REQUIRE(emulator.state() == srgba::core::RunState::Empty);
+}
+
+TEST_CASE("Direct boot initializes post-BIOS state and runs a CPU-focused test ROM",
+          "[emulator][boot][integration]") {
+    const srgba::tests::TemporaryRom rom(srgba::tests::make_m2_cpu_test_rom());
+    srgba::core::Emulator emulator;
+    std::string error;
+
+    REQUIRE(emulator.load_rom(rom.path(), error));
+    REQUIRE(error.empty());
+    REQUIRE_FALSE(emulator.booting_through_bios());
+    REQUIRE(emulator.cpu().program_counter() == srgba::core::GbaBus::kGamePakStart);
+    REQUIRE(emulator.cpu().cpsr().mode() == srgba::core::ProcessorMode::System);
+    REQUIRE(emulator.cpu().register_value(srgba::core::Arm7Tdmi::kStackPointer) == 0x03007F00U);
+    REQUIRE(emulator.bus().post_boot_flag() == 1U);
+
+    for (std::size_t instruction = 0; instruction < 6U; ++instruction) {
+        const auto result = emulator.step_instruction();
+        REQUIRE(result.has_value());
+        REQUIRE(result->executed());
+    }
+
+    REQUIRE(emulator.cpu().register_value(2) == 43U);
+    REQUIRE(emulator.bus().read32(0x02000000U).value == 42U);
+    REQUIRE(emulator.bus().read32(0x02000004U).value == 43U);
+    REQUIRE(emulator.instruction_counter() == 6U);
+    REQUIRE(emulator.cycle_counter() > 0U);
+}
+
+TEST_CASE("A user BIOS selects the hardware reset vector and can fall back to direct boot",
+          "[emulator][bios][boot]") {
+    auto bios_bytes = std::vector<std::uint8_t>(srgba::core::GbaBus::kBiosSize, 0x5AU);
+    srgba::tests::write_word(bios_bytes, 0, 0xEAFFFFFEU);
+    const srgba::tests::TemporaryRom bios(bios_bytes);
+    const srgba::tests::TemporaryRom rom(srgba::tests::make_m2_cpu_test_rom());
+    srgba::core::Emulator emulator;
+    std::string error;
+
+    emulator.set_boot_mode(srgba::core::BootMode::Bios);
+    REQUIRE(emulator.load_bios(bios.path(), error));
+    REQUIRE(error.empty());
+    REQUIRE(emulator.load_rom(rom.path(), error));
+    REQUIRE(emulator.has_bios());
+    REQUIRE(emulator.booting_through_bios());
+    REQUIRE(emulator.cpu().program_counter() == srgba::core::GbaBus::kBiosStart);
+    REQUIRE(emulator.cpu().cpsr().mode() == srgba::core::ProcessorMode::Supervisor);
+
+    emulator.unload_bios();
+    REQUIRE_FALSE(emulator.has_bios());
+    REQUIRE_FALSE(emulator.booting_through_bios());
+    REQUIRE(emulator.cpu().program_counter() == srgba::core::GbaBus::kGamePakStart);
+    REQUIRE(emulator.cpu().cpsr().mode() == srgba::core::ProcessorMode::System);
 }

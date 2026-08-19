@@ -6,6 +6,8 @@
 
 namespace srgba::core {
 
+class GbaBus;
+
 enum class ProcessorMode : std::uint8_t {
     User = 0x10,
     Fiq = 0x11,
@@ -72,6 +74,7 @@ struct ShiftResult {
 struct ExecutionResult {
     ExecutionStatus status{ExecutionStatus::Executed};
     bool pipeline_flushed{};
+    std::uint32_t cycles{};
 
     [[nodiscard]] bool executed() const noexcept {
         return status == ExecutionStatus::Executed;
@@ -153,7 +156,10 @@ class Arm7Tdmi {
 
     [[nodiscard]] bool condition_passed(Condition condition) const noexcept;
     [[nodiscard]] ExecutionResult execute_arm(std::uint32_t instruction) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm(std::uint32_t instruction, GbaBus& bus) noexcept;
     [[nodiscard]] ExecutionResult execute_thumb(std::uint16_t instruction) noexcept;
+    [[nodiscard]] ExecutionResult execute_thumb(std::uint16_t instruction, GbaBus& bus) noexcept;
+    [[nodiscard]] ExecutionResult step(GbaBus& bus) noexcept;
 
     void take_exception(ExceptionType exception) noexcept;
     [[nodiscard]] bool try_take_irq() noexcept;
@@ -169,6 +175,15 @@ class Arm7Tdmi {
     [[nodiscard]] std::uint32_t arm_operand_register(std::size_t index,
                                                      bool register_shift) const noexcept;
     [[nodiscard]] std::uint32_t thumb_operand_register(std::size_t index) const noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_impl(std::uint32_t instruction, GbaBus* bus) noexcept;
+    [[nodiscard]] ExecutionResult execute_thumb_impl(std::uint16_t instruction,
+                                                     GbaBus* bus) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_single_transfer(std::uint32_t instruction,
+                                                              GbaBus& bus) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_halfword_transfer(std::uint32_t instruction,
+                                                                GbaBus& bus) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_block_transfer(std::uint32_t instruction,
+                                                             GbaBus& bus) noexcept;
     void branch_to(std::uint32_t target) noexcept;
     void advance_arm() noexcept;
     void advance_thumb() noexcept;
@@ -191,6 +206,7 @@ class Arm7Tdmi {
     std::array<std::uint32_t, 2> irq_sp_lr_{};
     std::array<std::uint32_t, 2> undefined_sp_lr_{};
     std::uint32_t program_counter_{};
+    bool next_fetch_sequential_{};
 
     ProgramStatusRegister cpsr_{};
     ProgramStatusRegister spsr_fiq_{};

@@ -27,6 +27,12 @@ class Application {
     [[nodiscard]] int run();
 
   private:
+    enum class FileDialogPurpose {
+        None,
+        Rom,
+        Bios,
+    };
+
     struct FileDialogResult {
         bool completed{};
         std::optional<std::filesystem::path> selected_path;
@@ -48,7 +54,9 @@ class Application {
     void draw_about_window();
 
     void request_open_rom();
+    void request_open_bios();
     void load_rom(const std::filesystem::path& path);
+    void load_bios(const std::filesystem::path& path);
     void close_rom();
     void apply_scale_filter() const noexcept;
     void save_settings() noexcept;
@@ -71,6 +79,7 @@ class Application {
     bool show_settings_{};
     bool show_about_{};
     bool file_dialog_open_{};
+    FileDialogPurpose file_dialog_purpose_{FileDialogPurpose::None};
     bool status_is_error_{};
     std::string status_message_{"Ready"};
 

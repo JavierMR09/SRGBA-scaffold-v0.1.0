@@ -16,6 +16,8 @@ struct Settings {
     int window_height{800};
     bool integer_scaling{true};
     ScaleFilter scale_filter{ScaleFilter::Nearest};
+    bool boot_through_bios{};
+    std::string bios_path;
     std::vector<std::string> recent_roms;
 
     [[nodiscard]] static Settings load(const std::filesystem::path& path) noexcept;
