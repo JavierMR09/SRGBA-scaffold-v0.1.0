@@ -3,9 +3,10 @@
 SRGBA is a clean-room Game Boy Advance emulator project written in C++20. The initial target is
 Windows 10/11 x64, with a platform-independent emulation core and an SDL3 desktop frontend.
 
-> **Project status:** foundation scaffold. SRGBA currently opens ROM files, parses their GBA
-> cartridge headers, stores frontend settings, and displays a placeholder framebuffer. It does
-> **not** execute ARM or Thumb instructions yet.
+> **Project status:** M1 ARM7TDMI foundation. SRGBA can execute isolated ARM data-processing and
+> Thumb ALU instruction vectors, model processor modes and exceptions, open ROM files, and display
+> a placeholder framebuffer. The CPU is not connected to a GBA memory bus yet, so games do not
+> boot in this milestone.
 
 ## What works in this scaffold
 
@@ -16,6 +17,10 @@ Windows 10/11 x64, with a platform-independent emulation core and an SDL3 deskto
 - Recent-ROM list and persistent video settings
 - Integer scaling plus nearest-neighbor or linear filtering
 - Pause, reset, close-ROM, and fullscreen frontend commands
+- ARM7TDMI physical and banked registers, CPSR, and five SPSRs
+- ARM condition evaluation and specification-accurate barrel-shifter edge cases
+- Base ARM data-processing and Thumb ALU instruction execution
+- ARM/Thumb branches, branch-with-link, branch-exchange, and exception entry/return
 - Isolated, testable `srgba_core` library
 - Automated core tests on Linux and full application builds on Windows
 - GitHub Actions release ZIP generation
@@ -24,9 +29,9 @@ Windows 10/11 x64, with a platform-independent emulation core and an SDL3 deskto
 
 Install:
 
-1. Visual Studio 2022 with **Desktop development with C++**
+1. Visual Studio 2026 with **Desktop development with C++**
 2. Git
-3. CMake 3.28 or newer
+3. CMake 4.2 or newer
 
 Dependencies are downloaded at CMake configure time and pinned to known versions:
 
@@ -67,7 +72,7 @@ ctest --preset core-dev
 
 ```text
 include/srgba/core/   Public, platform-independent core API
-src/core/             Cartridge and emulator-core implementation
+src/core/             ARM7TDMI, cartridge, and emulator-core implementation
 src/app/              SDL3 and Dear ImGui desktop frontend
 tests/                Unit and lifecycle tests
 cmake/                Dependency and compiler-warning configuration
@@ -88,4 +93,3 @@ file patterns are excluded from Git by default.
 
 SRGBA is licensed under the [MIT License](LICENSE). Third-party dependencies retain their own
 licenses, which are included in packaged releases.
-

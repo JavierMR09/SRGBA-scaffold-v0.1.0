@@ -1,3 +1,0 @@
-C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/sdl3-subbuild/CMakeFiles/sdl3-populate.dir
-C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/sdl3-subbuild/CMakeFiles/edit_cache.dir
-C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/sdl3-subbuild/CMakeFiles/rebuild_cache.dir

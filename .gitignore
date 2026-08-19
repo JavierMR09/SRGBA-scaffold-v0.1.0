@@ -1,0 +1,3 @@
+# The repository currently keeps the CMake project in the SRGBA subdirectory.
+/build/
+/SRGBA/build/

@@ -21,6 +21,7 @@ bool Emulator::load_rom(const std::filesystem::path& path, std::string& error_me
     try {
         auto cartridge = Cartridge::load(path);
         cartridge_ = std::move(cartridge);
+        cpu_.reset();
         state_ = RunState::Running;
         frame_counter_ = 0;
         error_message.clear();
@@ -34,6 +35,7 @@ bool Emulator::load_rom(const std::filesystem::path& path, std::string& error_me
 
 void Emulator::unload_rom() noexcept {
     cartridge_.reset();
+    cpu_.reset();
     state_ = RunState::Empty;
     frame_counter_ = 0;
     render_idle_frame();
@@ -43,6 +45,7 @@ void Emulator::reset() noexcept {
     if (!cartridge_) {
         return;
     }
+    cpu_.reset();
     state_ = RunState::Running;
     frame_counter_ = 0;
     render_scaffold_frame();
@@ -93,6 +96,10 @@ std::uint64_t Emulator::frame_counter() const noexcept {
 
 const Framebuffer& Emulator::framebuffer() const noexcept {
     return framebuffer_;
+}
+
+const Arm7Tdmi& Emulator::cpu() const noexcept {
+    return cpu_;
 }
 
 void Emulator::render_idle_frame() noexcept {

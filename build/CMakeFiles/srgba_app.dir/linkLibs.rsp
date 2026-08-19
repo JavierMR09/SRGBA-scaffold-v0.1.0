@@ -1,1 +1,0 @@
- libsrgba_core.a "_deps/sdl3-build/libSDL3.a" libsrgba_imgui.a "_deps/sdl3-build/libSDL3.a" -lm -lkernel32 -luser32 -lgdi32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi -lshell32 -ldinput8 -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 

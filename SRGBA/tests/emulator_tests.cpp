@@ -14,6 +14,7 @@ TEST_CASE("The emulator starts without a cartridge", "[emulator]") {
     REQUIRE(emulator.state() == srgba::core::RunState::Empty);
     REQUIRE(emulator.frame_counter() == 0);
     REQUIRE(emulator.framebuffer().size() == srgba::core::kFramebufferPixelCount);
+    REQUIRE(emulator.cpu().cpsr().mode() == srgba::core::ProcessorMode::Supervisor);
 }
 
 TEST_CASE("A loaded cartridge can run, pause, and reset scaffold frames", "[emulator]") {
@@ -29,6 +30,8 @@ TEST_CASE("A loaded cartridge can run, pause, and reset scaffold frames", "[emul
     emulator.run_frame();
     REQUIRE(emulator.frame_counter() == 1);
 
+    const auto initial_cpu_status = emulator.cpu().cpsr().value();
+
     emulator.set_paused(true);
     emulator.run_frame();
     REQUIRE(emulator.is_paused());
@@ -37,6 +40,7 @@ TEST_CASE("A loaded cartridge can run, pause, and reset scaffold frames", "[emul
     emulator.reset();
     REQUIRE_FALSE(emulator.is_paused());
     REQUIRE(emulator.frame_counter() == 0);
+    REQUIRE(emulator.cpu().cpsr().value() == initial_cpu_status);
 }
 
 TEST_CASE("A failed load preserves an empty emulator", "[emulator]") {
