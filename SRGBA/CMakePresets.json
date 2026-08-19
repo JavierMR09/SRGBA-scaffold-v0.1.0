@@ -1,0 +1,66 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows x64 - Visual Studio 2022",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/windows-msvc",
+      "cacheVariables": {
+        "SRGBA_BUILD_APP": "ON",
+        "SRGBA_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "core-dev",
+      "displayName": "Core-only development build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/core-dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SRGBA_BUILD_APP": "OFF",
+        "SRGBA_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "core-dev",
+      "configurePreset": "core-dev"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "core-dev",
+      "configurePreset": "core-dev",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
+

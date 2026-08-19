@@ -1,0 +1,2 @@
+C:\msys64\ucrt64\bin\ar.exe qc libsrgba_core.a CMakeFiles/srgba_core.dir/src/core/cartridge.cpp.obj CMakeFiles/srgba_core.dir/src/core/emulator.cpp.obj
+C:\msys64\ucrt64\bin\ranlib.exe libsrgba_core.a

@@ -1,0 +1,124 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : 
+		[
+			"install"
+		],
+		"files" : 
+		[
+			"CMakeLists.txt"
+		],
+		"nodes" : 
+		[
+			{
+				"file" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 67,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 68,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 69,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 74,
+				"parent" : 0
+			},
+			{
+				"command" : 0,
+				"file" : 0,
+				"line" : 79,
+				"parent" : 0
+			}
+		]
+	},
+	"codemodelVersion" : 
+	{
+		"major" : 2,
+		"minor" : 11
+	},
+	"installers" : 
+	[
+		{
+			"backtrace" : 1,
+			"component" : "Unspecified",
+			"destination" : ".",
+			"paths" : 
+			[
+				"SRGBA.exe"
+			],
+			"targetId" : "srgba_app::@6890427a1f51a3e7e1df",
+			"targetIndex" : 31,
+			"type" : "target"
+		},
+		{
+			"backtrace" : 2,
+			"component" : "Unspecified",
+			"destination" : ".",
+			"paths" : 
+			[
+				"README.md",
+				"LICENSE"
+			],
+			"type" : "file"
+		},
+		{
+			"backtrace" : 3,
+			"component" : "Unspecified",
+			"destination" : "licenses",
+			"paths" : 
+			[
+				{
+					"from" : "C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/sdl3-src/LICENSE.txt",
+					"to" : "SDL3.txt"
+				}
+			],
+			"type" : "file"
+		},
+		{
+			"backtrace" : 4,
+			"component" : "Unspecified",
+			"destination" : "licenses",
+			"paths" : 
+			[
+				{
+					"from" : "C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/imgui-src/LICENSE.txt",
+					"to" : "Dear-ImGui.txt"
+				}
+			],
+			"type" : "file"
+		},
+		{
+			"backtrace" : 5,
+			"component" : "Unspecified",
+			"destination" : "licenses",
+			"paths" : 
+			[
+				{
+					"from" : "C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/nlohmann_json-src/LICENSE.MIT",
+					"to" : "nlohmann-json.txt"
+				}
+			],
+			"type" : "file"
+		}
+	],
+	"paths" : 
+	{
+		"build" : ".",
+		"source" : "."
+	}
+}

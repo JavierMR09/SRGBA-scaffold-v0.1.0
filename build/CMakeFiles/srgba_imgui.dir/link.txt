@@ -1,0 +1,2 @@
+C:\msys64\ucrt64\bin\ar.exe qc libsrgba_imgui.a "CMakeFiles/srgba_imgui.dir/_deps/imgui-src/imgui.cpp.obj" "CMakeFiles/srgba_imgui.dir/_deps/imgui-src/imgui_draw.cpp.obj" "CMakeFiles/srgba_imgui.dir/_deps/imgui-src/imgui_tables.cpp.obj" "CMakeFiles/srgba_imgui.dir/_deps/imgui-src/imgui_widgets.cpp.obj" "CMakeFiles/srgba_imgui.dir/_deps/imgui-src/backends/imgui_impl_sdl3.cpp.obj" "CMakeFiles/srgba_imgui.dir/_deps/imgui-src/backends/imgui_impl_sdlrenderer3.cpp.obj"
+C:\msys64\ucrt64\bin\ranlib.exe libsrgba_imgui.a

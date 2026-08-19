@@ -1,0 +1,11 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/cmake_install.cmake",
+		"C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/sdl3-build/cmake_install.cmake",
+		"C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/nlohmann_json-build/cmake_install.cmake",
+		"C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/catch2-build/cmake_install.cmake",
+		"C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/_deps/catch2-build/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

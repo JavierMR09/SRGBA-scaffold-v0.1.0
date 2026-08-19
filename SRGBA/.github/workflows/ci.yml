@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Core tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Configure core and tests
+        run: >-
+          cmake -S . -B build/core
+          -DCMAKE_BUILD_TYPE=Debug
+          -DSRGBA_BUILD_APP=OFF
+          -DSRGBA_BUILD_TESTS=ON
+          -DSRGBA_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build/core --parallel
+
+      - name: Test
+        run: ctest --test-dir build/core --output-on-failure
+
+  windows-app:
+    name: Windows application and package
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build/windows -A x64
+          -DSRGBA_BUILD_APP=ON
+          -DSRGBA_BUILD_TESTS=ON
+          -DSRGBA_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build/windows --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build/windows -C Release --output-on-failure
+
+      - name: Package portable ZIP
+        run: cpack --config build/windows/CPackConfig.cmake -C Release
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SRGBA-windows-x64
+          path: build/windows/packages/SRGBA-*.zip
+          if-no-files-found: error
+

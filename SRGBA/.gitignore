@@ -1,0 +1,40 @@
+# CMake build trees
+/build/
+/out/
+/cmake-build-*/
+
+# IDE files
+/.vs/
+/.vscode/
+/.idea/
+*.sln
+*.vcxproj*
+
+# Local CMake configuration
+CMakeUserPresets.json
+
+# Compiler output
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+*.dylib
+
+# Runtime data and copyrighted content
+*.gba
+*.agb
+*.bin
+*.sav
+*.srm
+*.state
+*.ss[0-9]
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
