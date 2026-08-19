@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SRGBA
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "A clean-room Game Boy Advance emulator"
     LANGUAGES CXX
 )
@@ -24,6 +24,7 @@ include(CompilerWarnings)
 
 add_library(
     srgba_core
+    src/core/arm7tdmi.cpp
     src/core/cartridge.cpp
     src/core/emulator.cpp
 )
@@ -106,8 +107,11 @@ if(SRGBA_BUILD_TESTS)
 
     add_executable(
         srgba_tests
+        tests/arm7tdmi_state_tests.cpp
+        tests/arm_instruction_tests.cpp
         tests/emulator_tests.cpp
         tests/rom_header_tests.cpp
+        tests/thumb_instruction_tests.cpp
     )
     target_compile_features(srgba_tests PRIVATE cxx_std_20)
     target_include_directories(srgba_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")

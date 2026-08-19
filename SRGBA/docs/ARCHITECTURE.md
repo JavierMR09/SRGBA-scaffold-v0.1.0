@@ -36,6 +36,15 @@ costs. The scheduler then advances hardware to the new master timestamp.
 The first implementation will be an interpreter. A decoded-instruction cache or JIT can be
 considered only after the interpreter passes instruction and timing tests.
 
+## M1 CPU boundary
+
+`Arm7Tdmi` now owns the physical register banks, CPSR, SPSRs, ARM/Thumb execution state, exception
+entry, and the first instruction decoders. Its stored r15 value is the current fetch address;
+operand reads apply the ARM7TDMI pipeline offset, while branch results report that the pipeline
+must be refilled. Unsupported instruction classes leave state unchanged so later milestones can
+add memory, multiply, and transfer decoders without treating missing implementation as hardware
+behavior.
+
 ## Planned core modules
 
 ```text
@@ -80,4 +89,3 @@ Emulator
 Specifications, public research, and test behavior may guide implementation. Do not paste or
 translate implementation code from another emulator. Code from GPL emulators is not compatible
 with SRGBA's MIT license unless the project's licensing strategy is deliberately changed first.
-

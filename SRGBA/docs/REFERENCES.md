@@ -14,6 +14,10 @@ material is not copied into release archives unless its redistribution terms exp
   - Banked registers and processor modes
   - Exception entry and instruction cycle timing
 
+M1 specifically follows DDI 0210C Chapter 2 for modes, register banking, status registers, and
+exception entry, plus DDI 0029E Chapters 4 and 5 for conditions, shifts, ARM data processing, and
+Thumb ALU and branch formats.
+
 ## GBA hardware
 
 - [GBATEK](https://problemkaputt.de/gbatek.htm), Martin Korth
@@ -31,4 +35,3 @@ material is not copied into release archives unless its redistribution terms exp
 When sources disagree, prefer measured hardware-test results, followed by the ARM manuals for CPU
 semantics and current GBATEK material for GBA-specific behavior. Document every deliberate
 compatibility quirk in code and accompany it with a focused regression test.
-

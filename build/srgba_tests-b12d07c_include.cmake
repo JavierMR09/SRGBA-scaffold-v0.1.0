@@ -1,5 +1,0 @@
-if(EXISTS "C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/srgba_tests-b12d07c_tests.cmake")
-  include("C:/Users/mvton/SRGBA-scaffold-v0.1.0/build/srgba_tests-b12d07c_tests.cmake")
-else()
-  add_test(srgba_tests_NOT_BUILT-b12d07c srgba_tests_NOT_BUILT-b12d07c)
-endif()

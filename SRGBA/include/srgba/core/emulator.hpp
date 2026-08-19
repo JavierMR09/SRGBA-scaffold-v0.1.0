@@ -1,5 +1,6 @@
 #pragma once
 
+#include "srgba/core/arm7tdmi.hpp"
 #include "srgba/core/cartridge.hpp"
 #include "srgba/core/framebuffer.hpp"
 
@@ -34,12 +35,14 @@ class Emulator {
     [[nodiscard]] std::size_t rom_size() const noexcept;
     [[nodiscard]] std::uint64_t frame_counter() const noexcept;
     [[nodiscard]] const Framebuffer& framebuffer() const noexcept;
+    [[nodiscard]] const Arm7Tdmi& cpu() const noexcept;
 
   private:
     void render_idle_frame() noexcept;
     void render_scaffold_frame() noexcept;
 
     std::optional<Cartridge> cartridge_;
+    Arm7Tdmi cpu_{};
     Framebuffer framebuffer_{};
     RunState state_{RunState::Empty};
     std::uint64_t frame_counter_{};

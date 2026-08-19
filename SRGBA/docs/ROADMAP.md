@@ -1,6 +1,6 @@
 # SRGBA Roadmap
 
-## M0 - Desktop foundation (current)
+## M0 - Desktop foundation (complete)
 
 - [x] C++20 and CMake project
 - [x] SDL3 window and renderer
@@ -10,19 +10,19 @@
 - [x] Settings and recent files
 - [x] Core tests, Windows CI, and release packaging
 
-## M1 - ARM7TDMI foundation
+## M1 - ARM7TDMI foundation (complete)
 
-- [ ] Physical and banked register model
-- [ ] CPSR and SPSR representation
-- [ ] Processor mode transitions
-- [ ] ARM condition evaluation and barrel shifter
-- [ ] ARM decoder and base data-processing instructions
-- [ ] Thumb decoder and base ALU instructions
-- [ ] Branch, branch-with-link, and branch-exchange pipeline behavior
-- [ ] Exceptions and interrupt entry
-- [ ] Instruction-vector test harness
+- [x] Physical and banked register model
+- [x] CPSR and SPSR representation
+- [x] Processor mode transitions
+- [x] ARM condition evaluation and barrel shifter
+- [x] ARM decoder and base data-processing instructions
+- [x] Thumb decoder and base ALU instructions
+- [x] Branch, branch-with-link, and branch-exchange pipeline behavior
+- [x] Exceptions and interrupt entry
+- [x] Instruction-vector test harness
 
-## M2 - GBA bus and boot
+## M2 - GBA bus and boot (next)
 
 - [ ] BIOS, EWRAM, IWRAM, IO, palette, VRAM, OAM, and Game Pak regions
 - [ ] Mirroring, access width, alignment, and open-bus behavior
@@ -74,4 +74,3 @@
 - [ ] Crash reporting guidance and issue templates
 - [ ] Stable save-state policy
 - [ ] Signed, reproducible Windows release artifacts
-
