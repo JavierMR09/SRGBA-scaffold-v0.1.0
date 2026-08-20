@@ -3,6 +3,7 @@
 #include "srgba/core/cartridge.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -21,6 +22,14 @@ inline void write_ascii(std::vector<std::uint8_t>& bytes, const std::size_t offs
     }
 }
 
+inline void write_word(std::vector<std::uint8_t>& bytes, const std::size_t offset,
+                       const std::uint32_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value);
+    bytes[offset + 1U] = static_cast<std::uint8_t>(value >> 8U);
+    bytes[offset + 2U] = static_cast<std::uint8_t>(value >> 16U);
+    bytes[offset + 3U] = static_cast<std::uint8_t>(value >> 24U);
+}
+
 [[nodiscard]] inline std::vector<std::uint8_t> make_valid_test_rom() {
     std::vector<std::uint8_t> bytes(256, 0);
     write_ascii(bytes, 0xA0, 12, "SRGBA TEST");
@@ -35,6 +44,23 @@ inline void write_ascii(std::vector<std::uint8_t>& bytes, const std::size_t offs
         checksum = static_cast<std::uint8_t>(checksum - bytes[offset]);
     }
     bytes[0xBD] = static_cast<std::uint8_t>(checksum - 0x19U);
+    return bytes;
+}
+
+[[nodiscard]] inline std::vector<std::uint8_t> make_m2_cpu_test_rom() {
+    auto bytes = make_valid_test_rom();
+    constexpr std::array<std::uint32_t, 7> instructions{
+        0xE3A00402U, // MOV r0, #0x02000000
+        0xE3A0102AU, // MOV r1, #42
+        0xE5801000U, // STR r1, [r0]
+        0xE5902000U, // LDR r2, [r0]
+        0xE2822001U, // ADD r2, r2, #1
+        0xE5802004U, // STR r2, [r0, #4]
+        0xEAFFFFFEU, // B .
+    };
+    for (std::size_t index = 0; index < instructions.size(); ++index) {
+        write_word(bytes, index * sizeof(std::uint32_t), instructions[index]);
+    }
     return bytes;
 }
 

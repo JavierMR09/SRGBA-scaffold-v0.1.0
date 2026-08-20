@@ -3,10 +3,10 @@
 SRGBA is a clean-room Game Boy Advance emulator project written in C++20. The initial target is
 Windows 10/11 x64, with a platform-independent emulation core and an SDL3 desktop frontend.
 
-> **Project status:** M1 ARM7TDMI foundation. SRGBA can execute isolated ARM data-processing and
-> Thumb ALU instruction vectors, model processor modes and exceptions, open ROM files, and display
-> a placeholder framebuffer. The CPU is not connected to a GBA memory bus yet, so games do not
-> boot in this milestone.
+> **Project status:** M2 GBA bus and boot foundation. SRGBA now fetches ARM and Thumb code from a
+> hardware-mapped Game Pak, executes the base load/store families, and supports direct or
+> user-BIOS boot paths. Video remains a diagnostic placeholder until M3, and commercial-game
+> compatibility is not expected yet.
 
 ## What works in this scaffold
 
@@ -21,6 +21,15 @@ Windows 10/11 x64, with a platform-independent emulation core and an SDL3 deskto
 - ARM condition evaluation and specification-accurate barrel-shifter edge cases
 - Base ARM data-processing and Thumb ALU instruction execution
 - ARM/Thumb branches, branch-with-link, branch-exchange, and exception entry/return
+- BIOS, EWRAM, IWRAM, IO, palette, VRAM, OAM, and three Game Pak ROM windows
+- GBA memory mirroring, ARM7TDMI alignment rotation, open-bus latching, and video byte-write rules
+- WAITCNT-controlled sequential and non-sequential Game Pak access timing
+- ARM single, halfword/signed, and block data transfers
+- Thumb PC/SP-relative, register/immediate, signed, stack, and multiple data transfers
+- Cycle-counted CPU instruction fetch through the GBA bus
+- Validated 16 KiB user BIOS loading with protected reads outside BIOS execution
+- Default post-BIOS direct boot for legally distributed homebrew without a proprietary BIOS
+- Generated CPU-focused test ROM that executes code from Game Pak and writes results to EWRAM
 - Isolated, testable `srgba_core` library
 - Automated core tests on Linux and full application builds on Windows
 - GitHub Actions release ZIP generation
@@ -72,7 +81,7 @@ ctest --preset core-dev
 
 ```text
 include/srgba/core/   Public, platform-independent core API
-src/core/             ARM7TDMI, cartridge, and emulator-core implementation
+src/core/             ARM7TDMI, GBA bus, cartridge, and emulator-core implementation
 src/app/              SDL3 and Dear ImGui desktop frontend
 tests/                Unit and lifecycle tests
 cmake/                Dependency and compiler-warning configuration
@@ -88,6 +97,11 @@ hardware components.
 SRGBA does not contain games, commercial ROMs, Nintendo artwork, encryption keys, or Nintendo's
 proprietary GBA BIOS. Users are responsible for supplying legally obtained software. ROM and BIOS
 file patterns are excluded from Git by default.
+
+Direct boot is enabled by default and initializes the CPU, stack banks, and minimum post-BIOS IO
+state before starting at `0x08000000`. To use your own BIOS, choose **File > Load BIOS**, select an
+exactly 16 KiB image, then choose **Use loaded BIOS** in Settings. SRGBA stores only the path in its
+local settings; the BIOS is never copied into a build or release package.
 
 ## License
 

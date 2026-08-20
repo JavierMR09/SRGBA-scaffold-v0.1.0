@@ -1,5 +1,7 @@
 #include "srgba/core/arm7tdmi.hpp"
 
+#include "srgba/core/gba_bus.hpp"
+
 #include <bit>
 #include <cassert>
 #include <cstdint>
@@ -29,8 +31,9 @@ namespace {
     return bit(value, 31) ? shifted | (~0U << (32U - amount)) : shifted;
 }
 
-[[nodiscard]] constexpr ExecutionResult executed(const bool pipeline_flushed = false) noexcept {
-    return {ExecutionStatus::Executed, pipeline_flushed};
+[[nodiscard]] constexpr ExecutionResult executed(const bool pipeline_flushed = false,
+                                                 const std::uint32_t cycles = 0) noexcept {
+    return {ExecutionStatus::Executed, pipeline_flushed, cycles};
 }
 
 [[nodiscard]] constexpr ExecutionResult status(const ExecutionStatus value) noexcept {
@@ -256,6 +259,7 @@ void Arm7Tdmi::reset() noexcept {
     irq_sp_lr_.fill(0);
     undefined_sp_lr_.fill(0);
     program_counter_ = 0;
+    next_fetch_sequential_ = false;
 
     cpsr_ = ProgramStatusRegister{};
     cpsr_.set_mode(ProcessorMode::Supervisor);
@@ -480,6 +484,7 @@ void Arm7Tdmi::branch_to(const std::uint32_t target) noexcept {
     } else {
         program_counter_ = target & ~3U;
     }
+    next_fetch_sequential_ = false;
 }
 
 void Arm7Tdmi::advance_arm() noexcept {
@@ -506,7 +511,253 @@ void Arm7Tdmi::set_arithmetic_flags(const ArithmeticResult& result) noexcept {
     cpsr_.set_overflow(result.overflow);
 }
 
+ExecutionResult Arm7Tdmi::execute_arm_single_transfer(const std::uint32_t instruction,
+                                                      GbaBus& bus) noexcept {
+    const bool register_offset = bit(instruction, 25);
+    const bool pre_indexed = bit(instruction, 24);
+    const bool add_offset = bit(instruction, 23);
+    const bool byte_transfer = bit(instruction, 22);
+    const bool write_back = bit(instruction, 21) || !pre_indexed;
+    const bool load = bit(instruction, 20);
+    const auto base_register = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
+    const auto data_register = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
+
+    if (write_back && base_register == kProgramCounter) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+    if (load && byte_transfer && data_register == kProgramCounter) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+    if (load && write_back && data_register == base_register) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    std::uint32_t offset = instruction & 0xFFFU;
+    if (register_offset) {
+        if (bit(instruction, 4)) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const auto type = static_cast<ShiftType>((instruction >> 5U) & 0x3U);
+        const auto amount = static_cast<std::uint8_t>((instruction >> 7U) & 0x1FU);
+        const auto source = static_cast<std::size_t>(instruction & 0xFU);
+        offset =
+            shift_by_immediate(type, arm_operand_register(source, false), amount, cpsr_.carry())
+                .value;
+    }
+
+    const auto base = arm_operand_register(base_register, false);
+    const auto adjusted = add_offset ? base + offset : base - offset;
+    const auto address = pre_indexed ? adjusted : base;
+    const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+
+    if (load) {
+        const auto read = byte_transfer ? bus.read8(address, access) : bus.read32(address, access);
+        if (write_back) {
+            set_register(base_register, adjusted);
+        }
+        if (data_register == kProgramCounter) {
+            branch_to(read.value);
+            return executed(true, read.cycles + 1U);
+        }
+        set_register(data_register, read.value);
+        advance_arm();
+        return executed(false, read.cycles + 1U);
+    }
+
+    const auto value =
+        data_register == kProgramCounter ? program_counter_ + 12U : register_value(data_register);
+    const auto write = byte_transfer ? bus.write8(address, static_cast<std::uint8_t>(value), access)
+                                     : bus.write32(address, value, access);
+    if (write_back) {
+        set_register(base_register, adjusted);
+    }
+    advance_arm();
+    return executed(false, write.cycles);
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_halfword_transfer(const std::uint32_t instruction,
+                                                        GbaBus& bus) noexcept {
+    const bool pre_indexed = bit(instruction, 24);
+    const bool add_offset = bit(instruction, 23);
+    const bool immediate_offset = bit(instruction, 22);
+    const bool write_back = bit(instruction, 21) || !pre_indexed;
+    const bool load = bit(instruction, 20);
+    const bool signed_transfer = bit(instruction, 6);
+    const bool halfword = bit(instruction, 5);
+    const auto base_register = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
+    const auto data_register = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
+
+    if ((!load && signed_transfer) || (!signed_transfer && !halfword) ||
+        (load && data_register == kProgramCounter) ||
+        (write_back && base_register == kProgramCounter) ||
+        (load && write_back && data_register == base_register)) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    std::uint32_t offset = 0;
+    if (immediate_offset) {
+        offset = ((instruction >> 8U) & 0xFU) << 4U;
+        offset |= instruction & 0xFU;
+    } else {
+        if ((instruction & 0x00000F00U) != 0U || (instruction & 0xFU) == kProgramCounter) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        offset = register_value(instruction & 0xFU);
+    }
+
+    const auto base = arm_operand_register(base_register, false);
+    const auto adjusted = add_offset ? base + offset : base - offset;
+    const auto address = pre_indexed ? adjusted : base;
+    const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+
+    if (!load) {
+        const auto source = data_register == kProgramCounter ? program_counter_ + 12U
+                                                             : register_value(data_register);
+        const auto value = static_cast<std::uint16_t>(source);
+        const auto write = bus.write16(address, value, access);
+        if (write_back) {
+            set_register(base_register, adjusted);
+        }
+        advance_arm();
+        return executed(false, write.cycles);
+    }
+
+    std::uint32_t value = 0;
+    std::uint32_t cycles = 0;
+    if (signed_transfer && !halfword) {
+        const auto read = bus.read8(address, access);
+        value = static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(static_cast<std::int8_t>(read.value)));
+        cycles = read.cycles;
+    } else {
+        const auto read = bus.read16(address, access);
+        value = signed_transfer ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
+                                      static_cast<std::int16_t>(read.value)))
+                                : read.value;
+        cycles = read.cycles;
+    }
+
+    if (write_back) {
+        set_register(base_register, adjusted);
+    }
+    set_register(data_register, value);
+    advance_arm();
+    return executed(false, cycles + 1U);
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_block_transfer(const std::uint32_t instruction,
+                                                     GbaBus& bus) noexcept {
+    const bool pre_indexed = bit(instruction, 24);
+    const bool increment = bit(instruction, 23);
+    const bool load_psr_or_user_bank = bit(instruction, 22);
+    const bool write_back = bit(instruction, 21);
+    const bool load = bit(instruction, 20);
+    const auto base_register = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
+    const auto register_list = static_cast<std::uint16_t>(instruction);
+    const auto register_count = static_cast<std::uint32_t>(std::popcount(register_list));
+
+    if (register_list == 0U || load_psr_or_user_bank || base_register == kProgramCounter ||
+        (load && write_back && bit(register_list, static_cast<unsigned>(base_register)))) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    const auto base = register_value(base_register);
+    std::uint32_t address = 0;
+    if (increment) {
+        address = pre_indexed ? base + 4U : base;
+    } else {
+        address = pre_indexed ? base - register_count * 4U : base - (register_count - 1U) * 4U;
+    }
+
+    std::uint32_t cycles = 0;
+    bool first_access = true;
+    bool loaded_program_counter = false;
+    std::uint32_t loaded_pc_value = 0;
+    for (std::size_t register_index = 0; register_index < kRegisterCount; ++register_index) {
+        if (!bit(register_list, static_cast<unsigned>(register_index))) {
+            continue;
+        }
+        const BusAccess access{
+            first_access ? AccessSequence::NonSequential : AccessSequence::Sequential,
+            AccessKind::Data,
+            program_counter_,
+        };
+        first_access = false;
+
+        if (load) {
+            const auto read = bus.read32(address, access);
+            cycles += read.cycles;
+            if (register_index == kProgramCounter) {
+                loaded_program_counter = true;
+                loaded_pc_value = read.value;
+            } else {
+                set_register(register_index, read.value);
+            }
+        } else {
+            const auto value = register_index == kProgramCounter ? program_counter_ + 12U
+                                                                 : register_value(register_index);
+            cycles += bus.write32(address, value, access).cycles;
+        }
+        address += 4U;
+    }
+
+    if (write_back) {
+        const auto updated_base =
+            increment ? base + register_count * 4U : base - register_count * 4U;
+        set_register(base_register, updated_base);
+    }
+    if (loaded_program_counter) {
+        branch_to(loaded_pc_value);
+        return executed(true, cycles + 1U);
+    }
+    advance_arm();
+    return executed(false, cycles + static_cast<std::uint32_t>(load));
+}
+
 ExecutionResult Arm7Tdmi::execute_arm(const std::uint32_t instruction) noexcept {
+    return execute_arm_impl(instruction, nullptr);
+}
+
+ExecutionResult Arm7Tdmi::execute_arm(const std::uint32_t instruction, GbaBus& bus) noexcept {
+    return execute_arm_impl(instruction, &bus);
+}
+
+ExecutionResult Arm7Tdmi::execute_thumb(const std::uint16_t instruction) noexcept {
+    return execute_thumb_impl(instruction, nullptr);
+}
+
+ExecutionResult Arm7Tdmi::execute_thumb(const std::uint16_t instruction, GbaBus& bus) noexcept {
+    return execute_thumb_impl(instruction, &bus);
+}
+
+ExecutionResult Arm7Tdmi::step(GbaBus& bus) noexcept {
+    const BusAccess fetch_access{
+        next_fetch_sequential_ ? AccessSequence::Sequential : AccessSequence::NonSequential,
+        AccessKind::Instruction,
+        program_counter_,
+    };
+
+    ExecutionResult result;
+    std::uint32_t fetch_cycles = 0;
+    if (cpsr_.instruction_set() == InstructionSet::Arm) {
+        const auto fetch = bus.read32(program_counter_, fetch_access);
+        fetch_cycles = fetch.cycles;
+        result = execute_arm_impl(fetch.value, &bus);
+    } else {
+        const auto fetch = bus.read16(program_counter_, fetch_access);
+        fetch_cycles = fetch.cycles;
+        result = execute_thumb_impl(static_cast<std::uint16_t>(fetch.value), &bus);
+    }
+
+    result.cycles += fetch_cycles;
+    const bool completed = result.status == ExecutionStatus::Executed ||
+                           result.status == ExecutionStatus::ConditionFailed;
+    next_fetch_sequential_ = completed && !result.pipeline_flushed;
+    return result;
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_impl(const std::uint32_t instruction,
+                                           GbaBus* const bus) noexcept {
     if (cpsr_.instruction_set() != InstructionSet::Arm) {
         return status(ExecutionStatus::WrongInstructionSet);
     }
@@ -543,12 +794,26 @@ ExecutionResult Arm7Tdmi::execute_arm(const std::uint32_t instruction) noexcept 
         return executed(true);
     }
 
+    if ((instruction & 0x0E000000U) == 0x08000000U) {
+        return bus ? execute_arm_block_transfer(instruction, *bus)
+                   : status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    if ((instruction & 0x0C000000U) == 0x04000000U) {
+        return bus ? execute_arm_single_transfer(instruction, *bus)
+                   : status(ExecutionStatus::UnsupportedInstruction);
+    }
+
     if ((instruction & 0x0C000000U) != 0U) {
         return status(ExecutionStatus::UnsupportedInstruction);
     }
 
     // Multiply and halfword-transfer encodings overlap the data-processing class.
     if ((instruction & 0x0E000090U) == 0x00000090U) {
+        const bool halfword_or_signed_transfer = (instruction & 0x60U) != 0U;
+        if (halfword_or_signed_transfer && bus) {
+            return execute_arm_halfword_transfer(instruction, *bus);
+        }
         return status(ExecutionStatus::UnsupportedInstruction);
     }
 
@@ -691,7 +956,8 @@ ExecutionResult Arm7Tdmi::execute_arm(const std::uint32_t instruction) noexcept 
     return executed();
 }
 
-ExecutionResult Arm7Tdmi::execute_thumb(const std::uint16_t instruction) noexcept {
+ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
+                                             GbaBus* const bus) noexcept {
     if (cpsr_.instruction_set() != InstructionSet::Thumb) {
         return status(ExecutionStatus::WrongInstructionSet);
     }
@@ -781,6 +1047,283 @@ ExecutionResult Arm7Tdmi::execute_thumb(const std::uint16_t instruction) noexcep
         }
         advance_thumb();
         return executed();
+    }
+
+    // Format 6: PC-relative word load.
+    if ((instruction & 0xF800U) == 0x4800U) {
+        if (!bus) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const auto destination = static_cast<std::size_t>((instruction >> 8U) & 0x7U);
+        const auto address = ((program_counter_ + 4U) & ~3U) +
+                             (static_cast<std::uint32_t>(instruction & 0xFFU) << 2U);
+        const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+        const auto read = bus->read32(address, access);
+        set_register(destination, read.value);
+        advance_thumb();
+        return executed(false, read.cycles + 1U);
+    }
+
+    // Formats 7 and 8: register-offset transfers, including signed loads.
+    if ((instruction & 0xF000U) == 0x5000U) {
+        if (!bus) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const auto offset_register = static_cast<std::size_t>((instruction >> 6U) & 0x7U);
+        const auto base_register = static_cast<std::size_t>((instruction >> 3U) & 0x7U);
+        const auto data_register = static_cast<std::size_t>(instruction & 0x7U);
+        const auto address = register_value(base_register) + register_value(offset_register);
+        const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+
+        if (!bit(instruction, 9)) {
+            const bool load = bit(instruction, 11);
+            const bool byte_transfer = bit(instruction, 10);
+            if (load) {
+                const auto read =
+                    byte_transfer ? bus->read8(address, access) : bus->read32(address, access);
+                set_register(data_register, read.value);
+                advance_thumb();
+                return executed(false, read.cycles + 1U);
+            }
+            const auto value = register_value(data_register);
+            const auto write = byte_transfer
+                                   ? bus->write8(address, static_cast<std::uint8_t>(value), access)
+                                   : bus->write32(address, value, access);
+            advance_thumb();
+            return executed(false, write.cycles);
+        }
+
+        const bool halfword = bit(instruction, 11);
+        const bool signed_transfer = bit(instruction, 10);
+        if (!signed_transfer && !halfword) {
+            const auto write = bus->write16(
+                address, static_cast<std::uint16_t>(register_value(data_register)), access);
+            advance_thumb();
+            return executed(false, write.cycles);
+        }
+
+        std::uint32_t value = 0;
+        std::uint32_t cycles = 0;
+        if (signed_transfer && !halfword) {
+            const auto read = bus->read8(address, access);
+            value = static_cast<std::uint32_t>(
+                static_cast<std::int32_t>(static_cast<std::int8_t>(read.value)));
+            cycles = read.cycles;
+        } else {
+            const auto read = bus->read16(address, access);
+            value = signed_transfer ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
+                                          static_cast<std::int16_t>(read.value)))
+                                    : read.value;
+            cycles = read.cycles;
+        }
+        set_register(data_register, value);
+        advance_thumb();
+        return executed(false, cycles + 1U);
+    }
+
+    // Format 9: immediate-offset word and byte transfers.
+    if ((instruction & 0xE000U) == 0x6000U) {
+        if (!bus) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const bool byte_transfer = bit(instruction, 12);
+        const bool load = bit(instruction, 11);
+        const auto immediate = static_cast<std::uint32_t>((instruction >> 6U) & 0x1FU);
+        const auto offset = byte_transfer ? immediate : immediate << 2U;
+        const auto base_register = static_cast<std::size_t>((instruction >> 3U) & 0x7U);
+        const auto data_register = static_cast<std::size_t>(instruction & 0x7U);
+        const auto address = register_value(base_register) + offset;
+        const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+
+        if (load) {
+            const auto read =
+                byte_transfer ? bus->read8(address, access) : bus->read32(address, access);
+            set_register(data_register, read.value);
+            advance_thumb();
+            return executed(false, read.cycles + 1U);
+        }
+        const auto value = register_value(data_register);
+        const auto write = byte_transfer
+                               ? bus->write8(address, static_cast<std::uint8_t>(value), access)
+                               : bus->write32(address, value, access);
+        advance_thumb();
+        return executed(false, write.cycles);
+    }
+
+    // Format 10: immediate-offset halfword transfer.
+    if ((instruction & 0xF000U) == 0x8000U) {
+        if (!bus) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const bool load = bit(instruction, 11);
+        const auto offset = static_cast<std::uint32_t>((instruction >> 6U) & 0x1FU) << 1U;
+        const auto base_register = static_cast<std::size_t>((instruction >> 3U) & 0x7U);
+        const auto data_register = static_cast<std::size_t>(instruction & 0x7U);
+        const auto address = register_value(base_register) + offset;
+        const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+        if (load) {
+            const auto read = bus->read16(address, access);
+            set_register(data_register, read.value);
+            advance_thumb();
+            return executed(false, read.cycles + 1U);
+        }
+        const auto write = bus->write16(
+            address, static_cast<std::uint16_t>(register_value(data_register)), access);
+        advance_thumb();
+        return executed(false, write.cycles);
+    }
+
+    // Format 11: SP-relative word transfer.
+    if ((instruction & 0xF000U) == 0x9000U) {
+        if (!bus) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const bool load = bit(instruction, 11);
+        const auto data_register = static_cast<std::size_t>((instruction >> 8U) & 0x7U);
+        const auto address =
+            register_value(kStackPointer) + (static_cast<std::uint32_t>(instruction & 0xFFU) << 2U);
+        const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+        if (load) {
+            const auto read = bus->read32(address, access);
+            set_register(data_register, read.value);
+            advance_thumb();
+            return executed(false, read.cycles + 1U);
+        }
+        const auto write = bus->write32(address, register_value(data_register), access);
+        advance_thumb();
+        return executed(false, write.cycles);
+    }
+
+    // Format 12: form an address relative to PC or SP.
+    if ((instruction & 0xF000U) == 0xA000U) {
+        const bool use_stack_pointer = bit(instruction, 11);
+        const auto destination = static_cast<std::size_t>((instruction >> 8U) & 0x7U);
+        const auto offset = static_cast<std::uint32_t>(instruction & 0xFFU) << 2U;
+        const auto base =
+            use_stack_pointer ? register_value(kStackPointer) : (program_counter_ + 4U) & ~3U;
+        set_register(destination, base + offset);
+        advance_thumb();
+        return executed();
+    }
+
+    // Format 13: add or subtract an immediate from SP.
+    if ((instruction & 0xFF00U) == 0xB000U) {
+        const auto offset = static_cast<std::uint32_t>(instruction & 0x7FU) << 2U;
+        const auto stack_pointer = register_value(kStackPointer);
+        set_register(kStackPointer,
+                     bit(instruction, 7) ? stack_pointer - offset : stack_pointer + offset);
+        advance_thumb();
+        return executed();
+    }
+
+    // Format 14: PUSH and POP.
+    if ((instruction & 0xF600U) == 0xB400U) {
+        if (!bus) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const bool load = bit(instruction, 11);
+        const bool include_extra_register = bit(instruction, 8);
+        const auto register_list = static_cast<std::uint8_t>(instruction);
+        const auto register_count = static_cast<std::uint32_t>(std::popcount(register_list)) +
+                                    static_cast<std::uint32_t>(include_extra_register);
+        if (register_count == 0U) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+
+        auto address = register_value(kStackPointer);
+        if (!load) {
+            address -= register_count * 4U;
+            set_register(kStackPointer, address);
+        }
+
+        std::uint32_t cycles = 0;
+        bool first_access = true;
+        for (std::size_t register_index = 0; register_index < 8U; ++register_index) {
+            if (!bit(register_list, static_cast<unsigned>(register_index))) {
+                continue;
+            }
+            const BusAccess access{
+                first_access ? AccessSequence::NonSequential : AccessSequence::Sequential,
+                AccessKind::Data,
+                program_counter_,
+            };
+            first_access = false;
+            if (load) {
+                const auto read = bus->read32(address, access);
+                cycles += read.cycles;
+                set_register(register_index, read.value);
+            } else {
+                cycles += bus->write32(address, register_value(register_index), access).cycles;
+            }
+            address += 4U;
+        }
+
+        bool pipeline_flushed = false;
+        if (include_extra_register) {
+            const BusAccess access{
+                first_access ? AccessSequence::NonSequential : AccessSequence::Sequential,
+                AccessKind::Data,
+                program_counter_,
+            };
+            if (load) {
+                const auto read = bus->read32(address, access);
+                cycles += read.cycles;
+                branch_to(read.value);
+                pipeline_flushed = true;
+            } else {
+                cycles += bus->write32(address, register_value(kLinkRegister), access).cycles;
+            }
+            address += 4U;
+        }
+
+        if (load) {
+            set_register(kStackPointer, address);
+        }
+        if (!pipeline_flushed) {
+            advance_thumb();
+        }
+        return executed(pipeline_flushed, cycles + static_cast<std::uint32_t>(load));
+    }
+
+    // Format 15: multiple load/store of low registers.
+    if ((instruction & 0xF000U) == 0xC000U) {
+        if (!bus) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        const bool load = bit(instruction, 11);
+        const auto base_register = static_cast<std::size_t>((instruction >> 8U) & 0x7U);
+        const auto register_list = static_cast<std::uint8_t>(instruction);
+        const auto register_count = static_cast<std::uint32_t>(std::popcount(register_list));
+        if (register_list == 0U ||
+            (load && bit(register_list, static_cast<unsigned>(base_register)))) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+
+        auto address = register_value(base_register);
+        std::uint32_t cycles = 0;
+        bool first_access = true;
+        for (std::size_t register_index = 0; register_index < 8U; ++register_index) {
+            if (!bit(register_list, static_cast<unsigned>(register_index))) {
+                continue;
+            }
+            const BusAccess access{
+                first_access ? AccessSequence::NonSequential : AccessSequence::Sequential,
+                AccessKind::Data,
+                program_counter_,
+            };
+            first_access = false;
+            if (load) {
+                const auto read = bus->read32(address, access);
+                cycles += read.cycles;
+                set_register(register_index, read.value);
+            } else {
+                cycles += bus->write32(address, register_value(register_index), access).cycles;
+            }
+            address += 4U;
+        }
+        set_register(base_register, register_value(base_register) + register_count * 4U);
+        advance_thumb();
+        return executed(false, cycles + static_cast<std::uint32_t>(load));
     }
 
     // Format 4: ALU operations on low registers.

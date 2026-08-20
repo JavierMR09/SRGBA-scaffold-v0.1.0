@@ -18,10 +18,17 @@ M1 specifically follows DDI 0210C Chapter 2 for modes, register banking, status 
 exception entry, plus DDI 0029E Chapters 4 and 5 for conditions, shifts, ARM data processing, and
 Thumb ALU and branch formats.
 
+M2 uses DDI 0029E sections 4.9-4.11 for ARM single, halfword/signed, and block transfers and
+sections 5.6-5.15 for Thumb load/store, stack, and multiple-transfer formats. Chapter 6 informs
+sequential/non-sequential cycle classification and data-bus width behavior.
+
 ## GBA hardware
 
 - [GBATEK](https://problemkaputt.de/gbatek.htm), Martin Korth
   - Memory map, IO registers, timing, DMA, timers, PPU, APU, cartridges, and hardware quirks
+  - M2 specifically follows the GBA Memory Map, System Control, GamePak Prefetch, and
+    Unpredictable Things sections for region sizes, mirrors, WAITCNT, BIOS protection, open bus,
+    and byte writes to video memory
 - [Tonc](https://www.coranac.com/tonc/text/), Jasper Vijn
   - Readable explanations of GBA graphics, DMA, timers, interrupts, BIOS calls, and sound
 

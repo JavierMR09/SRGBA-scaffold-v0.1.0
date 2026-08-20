@@ -34,6 +34,8 @@ Settings Settings::load(const std::filesystem::path& path) noexcept {
         settings.window_height = std::clamp(json.value("window_height", 800), 480, 4320);
         settings.integer_scaling = json.value("integer_scaling", true);
         settings.scale_filter = parse_scale_filter(json.value("scale_filter", "nearest"));
+        settings.boot_through_bios = json.value("boot_through_bios", false);
+        settings.bios_path = json.value("bios_path", std::string{});
 
         if (json.contains("recent_roms") && json["recent_roms"].is_array()) {
             for (const auto& item : json["recent_roms"]) {
@@ -54,8 +56,12 @@ void Settings::save(const std::filesystem::path& path) const noexcept {
         std::filesystem::create_directories(path.parent_path(), error);
 
         const nlohmann::json json{
-            {"window_width", window_width},       {"window_height", window_height},
-            {"integer_scaling", integer_scaling}, {"scale_filter", scale_filter_name(scale_filter)},
+            {"window_width", window_width},
+            {"window_height", window_height},
+            {"integer_scaling", integer_scaling},
+            {"scale_filter", scale_filter_name(scale_filter)},
+            {"boot_through_bios", boot_through_bios},
+            {"bios_path", bios_path},
             {"recent_roms", recent_roms},
         };
 
