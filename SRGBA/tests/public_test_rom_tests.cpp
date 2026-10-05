@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -13,8 +14,20 @@
 namespace {
 
 [[nodiscard]] std::filesystem::path suite_directory() {
+#if defined(_MSC_VER)
+    // MSVC deprecates getenv (C4996) in favor of _dupenv_s.
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, "SRGBA_GBA_TESTS_DIR") != 0 || value == nullptr) {
+        return {};
+    }
+    std::filesystem::path path(value);
+    std::free(value);
+    return path;
+#else
     const char* value = std::getenv("SRGBA_GBA_TESTS_DIR");
     return value != nullptr ? std::filesystem::path(value) : std::filesystem::path{};
+#endif
 }
 
 void run_suite(const char* relative_path) {

@@ -64,7 +64,16 @@ jobs:
           -DSRGBA_WARNINGS_AS_ERRORS=ON
 
       - name: Build
-        run: cmake --build build/windows --config Release --parallel
+        shell: pwsh
+        run: |
+          cmake --build build/windows --config Release --parallel 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) {
+            # Surface compiler diagnostics as annotations so they are visible without the raw log.
+            Select-String -Path build.log -Pattern ': (fatal error|error|warning) [A-Z]+[0-9]+' |
+              Select-Object -First 40 |
+              ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+            exit 1
+          }
 
       - name: Test
         run: ctest --test-dir build/windows -C Release --output-on-failure
