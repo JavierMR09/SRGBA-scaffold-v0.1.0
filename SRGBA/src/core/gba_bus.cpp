@@ -1,5 +1,7 @@
 #include "srgba/core/gba_bus.hpp"
 
+#include "srgba/core/system_bios.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <fstream>
@@ -9,6 +11,16 @@ namespace srgba::core {
 namespace {
 
 constexpr std::uint32_t kWaitControlAddress = 0x04000204U;
+constexpr std::size_t kDisplayStatusOffset = 0x004U;
+constexpr std::size_t kVCountOffset = 0x006U;
+constexpr std::size_t kKeyInputOffset = 0x130U;
+constexpr std::size_t kKeyControlOffset = 0x132U;
+constexpr std::size_t kInterruptEnableOffset = 0x200U;
+constexpr std::size_t kInterruptFlagsOffset = 0x202U;
+constexpr std::size_t kInterruptMasterOffset = 0x208U;
+constexpr std::size_t kHaltControlOffset = 0x301U;
+// After the BIOS boot sequence, the last fetched BIOS opcode is "MSR CPSR_fc, r0" (0xE129F000).
+constexpr std::uint32_t kPostBootBiosLatch = 0xE129F000U;
 constexpr std::uint32_t kPostBootFlagAddress = 0x04000300U;
 constexpr std::uint32_t kInternalMemoryControlOffset = 0x00000800U;
 constexpr std::uint16_t kWaitControlWritableMask = 0x5FFFU;
@@ -45,6 +57,8 @@ void GbaBus::reset() noexcept {
     internal_memory_control_ = 0x0D000020U;
     bios_latch_ = 0;
     open_bus_ = 0;
+    key_input_ = kKeyMask;
+    halt_requested_ = false;
 }
 
 void GbaBus::initialize_post_bios() noexcept {
@@ -55,6 +69,15 @@ void GbaBus::initialize_post_bios() noexcept {
     io_[0x088] = 0x00U; // SOUNDBIAS = 0x0200
     io_[0x089] = 0x02U;
     io_[0x300] = 0x01U; // POSTFLG
+    io_[0x020] = 0x00U; // BG2PA = 0x0100
+    io_[0x021] = 0x01U;
+    io_[0x026] = 0x00U; // BG2PD = 0x0100
+    io_[0x027] = 0x01U;
+    io_[0x030] = 0x00U; // BG3PA = 0x0100
+    io_[0x031] = 0x01U;
+    io_[0x036] = 0x00U; // BG3PD = 0x0100
+    io_[0x037] = 0x01U;
+    bios_latch_ = kPostBootBiosLatch;
 }
 
 bool GbaBus::load_bios(const std::filesystem::path& path, std::string& error_message) noexcept {
@@ -240,6 +263,107 @@ std::uint8_t GbaBus::post_boot_flag() const noexcept {
     return io_[kPostBootFlagAddress - kIoStart];
 }
 
+bool GbaBus::using_builtin_bios() const noexcept {
+    return !has_bios();
+}
+
+void GbaBus::set_bios_latch(const std::uint32_t value) noexcept {
+    bios_latch_ = value;
+}
+
+void GbaBus::request_interrupt(const Interrupt interrupt) noexcept {
+    request_interrupts(static_cast<std::uint16_t>(interrupt));
+}
+
+void GbaBus::request_interrupts(const std::uint16_t mask) noexcept {
+    const auto flags = static_cast<std::uint16_t>(interrupt_flags() | (mask & kInterruptMask));
+    io_[kInterruptFlagsOffset] = static_cast<std::uint8_t>(flags);
+    io_[kInterruptFlagsOffset + 1U] = static_cast<std::uint8_t>(flags >> 8U);
+}
+
+std::uint16_t GbaBus::interrupt_enable() const noexcept {
+    return io_register16(kInterruptEnableOffset);
+}
+
+std::uint16_t GbaBus::interrupt_flags() const noexcept {
+    return io_register16(kInterruptFlagsOffset);
+}
+
+bool GbaBus::interrupt_master_enable() const noexcept {
+    return (io_[kInterruptMasterOffset] & 1U) != 0U;
+}
+
+bool GbaBus::interrupt_pending() const noexcept {
+    return (interrupt_enable() & interrupt_flags() & kInterruptMask) != 0U;
+}
+
+bool GbaBus::take_halt_request() noexcept {
+    const bool requested = halt_requested_;
+    halt_requested_ = false;
+    return requested;
+}
+
+void GbaBus::set_pressed_keys(const std::uint16_t pressed) noexcept {
+    const auto updated = static_cast<std::uint16_t>(~pressed & kKeyMask);
+    if (updated == key_input_) {
+        return;
+    }
+    key_input_ = updated;
+    update_keypad_interrupt();
+}
+
+std::uint16_t GbaBus::key_input() const noexcept {
+    return key_input_;
+}
+
+std::uint16_t GbaBus::io_register16(const std::uint32_t offset) const noexcept {
+    const auto index = static_cast<std::size_t>(offset & 0x3FEU);
+    if (index == kKeyInputOffset) {
+        return key_input_;
+    }
+    if (index == 0x204U) {
+        return wait_control_;
+    }
+    return static_cast<std::uint16_t>(io_[index] | (io_[index + 1U] << 8U));
+}
+
+void GbaBus::set_display_status_flags(const std::uint8_t flags) noexcept {
+    io_[kDisplayStatusOffset] =
+        static_cast<std::uint8_t>((io_[kDisplayStatusOffset] & ~0x07U) | (flags & 0x07U));
+}
+
+void GbaBus::set_vcount(const std::uint8_t line) noexcept {
+    io_[kVCountOffset] = line;
+    io_[kVCountOffset + 1U] = 0;
+}
+
+std::span<const std::uint8_t> GbaBus::palette_ram() const noexcept {
+    return palette_;
+}
+
+std::span<const std::uint8_t> GbaBus::video_ram() const noexcept {
+    return vram_;
+}
+
+std::span<const std::uint8_t> GbaBus::object_attribute_memory() const noexcept {
+    return oam_;
+}
+
+void GbaBus::update_keypad_interrupt() noexcept {
+    const auto control = io_register16(kKeyControlOffset);
+    if ((control & 0x4000U) == 0U) {
+        return;
+    }
+    const auto selected = static_cast<std::uint16_t>(control & kKeyMask);
+    const auto pressed = static_cast<std::uint16_t>(~key_input_ & kKeyMask);
+    const bool all_required = (control & 0x8000U) != 0U;
+    const bool condition = all_required ? selected != 0U && (pressed & selected) == selected
+                                        : (pressed & selected) != 0U;
+    if (condition) {
+        request_interrupt(Interrupt::Keypad);
+    }
+}
+
 GbaBus::Region GbaBus::region_for(const std::uint32_t address) noexcept {
     switch (address >> 24U) {
     case 0x00U:
@@ -302,14 +426,10 @@ std::uint8_t GbaBus::read_byte(const std::uint32_t address, const BusAccess& acc
     mapped = true;
     switch (region_for(address)) {
     case Region::Bios:
-        if (!has_bios()) {
-            mapped = false;
-            return 0;
-        }
         if (access.kind == AccessKind::Data && access.program_counter >= kBiosSize) {
             return byte_at(bios_latch_, address & 3U);
         }
-        return bios_[address];
+        return has_bios() ? bios_[address] : builtin_bios_image()[address];
 
     case Region::Ewram:
         return ewram_[static_cast<std::size_t>(address) & (kEwramSize - 1U)];
@@ -326,6 +446,12 @@ std::uint8_t GbaBus::read_byte(const std::uint32_t address, const BusAccess& acc
         }
         if (offset == 0x205U) {
             return static_cast<std::uint8_t>(wait_control_ >> 8U);
+        }
+        if (offset == kKeyInputOffset) {
+            return static_cast<std::uint8_t>(key_input_);
+        }
+        if (offset == kKeyInputOffset + 1U) {
+            return static_cast<std::uint8_t>(key_input_ >> 8U);
         }
         if (offset < io_.size()) {
             return io_[offset];
@@ -401,9 +527,47 @@ void GbaBus::write_byte(const std::uint32_t address, const std::uint8_t value,
             wait_control_ &= kWaitControlWritableMask;
             return;
         }
-        if (offset == 0x300U) {
+        switch (offset) {
+        case kDisplayStatusOffset:
+            // VBlank, HBlank, and VCount-match flags are owned by the PPU.
+            io_[offset] = static_cast<std::uint8_t>((io_[offset] & 0x07U) | (value & 0x38U));
+            return;
+        case kVCountOffset:
+        case kVCountOffset + 1U:
+        case kKeyInputOffset:
+        case kKeyInputOffset + 1U:
+            return;
+        case kKeyControlOffset:
+            io_[offset] = value;
+            update_keypad_interrupt();
+            return;
+        case kKeyControlOffset + 1U:
+            io_[offset] = static_cast<std::uint8_t>(value & 0xC3U);
+            update_keypad_interrupt();
+            return;
+        case kInterruptEnableOffset + 1U:
+            io_[offset] = static_cast<std::uint8_t>(value & 0x3FU);
+            return;
+        case kInterruptFlagsOffset:
+        case kInterruptFlagsOffset + 1U:
+            // Writing 1 acknowledges (clears) an interrupt request.
+            io_[offset] = static_cast<std::uint8_t>(io_[offset] & ~value);
+            return;
+        case kInterruptMasterOffset:
             io_[offset] = static_cast<std::uint8_t>(value & 1U);
             return;
+        case kInterruptMasterOffset + 1U:
+            return;
+        case 0x300U:
+            io_[offset] = static_cast<std::uint8_t>(value & 1U);
+            return;
+        case kHaltControlOffset:
+            // Bit 7 selects STOP mode; SRGBA treats STOP like HALT until low-power modes matter.
+            io_[offset] = value;
+            halt_requested_ = true;
+            return;
+        default:
+            break;
         }
         if (offset < io_.size()) {
             io_[offset] = value;

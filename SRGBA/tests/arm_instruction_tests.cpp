@@ -218,7 +218,7 @@ TEST_CASE("Unsupported ARM encodings leave CPU state available for a later decod
     Arm7Tdmi cpu;
     cpu.set_program_counter(0x100U);
 
-    const auto result = cpu.execute_arm(0xE0000291U); // MUL encoding, outside M1 base ARM ALU
+    const auto result = cpu.execute_arm(0xEE000010U); // MCR: the GBA has no coprocessors
 
     REQUIRE(result.status == ExecutionStatus::UnsupportedInstruction);
     REQUIRE(cpu.program_counter() == 0x100U);

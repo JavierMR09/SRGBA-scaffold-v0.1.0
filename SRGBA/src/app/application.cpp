@@ -19,6 +19,14 @@ namespace srgba::app {
 namespace {
 
 constexpr const char* kWindowTitle = "SRGBA";
+#ifndef SRGBA_VERSION
+#define SRGBA_VERSION "dev"
+#endif
+constexpr const char* kVersion = SRGBA_VERSION;
+
+// One GBA frame is 280,896 cycles of the 16.78 MHz master clock (~59.73 Hz).
+constexpr std::uint64_t kNanosecondsPerFrame = 280896ULL * 1000000000ULL / 16777216ULL;
+constexpr std::uint64_t kMaxCatchUpFrames = 4;
 constexpr SDL_DialogFileFilter kRomFilters[] = {
     {"Game Boy Advance ROMs", "gba;agb"},
     {"All files", "*"},
@@ -33,6 +41,28 @@ constexpr SDL_DialogFileFilter kBiosFilters[] = {
     char buffer[32]{};
     std::snprintf(buffer, sizeof(buffer), "%.2f MiB", static_cast<double>(bytes) / bytes_per_mib);
     return buffer;
+}
+
+[[nodiscard]] const char* describe_display_mode(const std::uint16_t control) noexcept {
+    if ((control & 0x0080U) != 0U) {
+        return "Forced blank";
+    }
+    switch (control & 0x7U) {
+    case 0:
+        return "Mode 0 (tiles: arrives in M4)";
+    case 1:
+        return "Mode 1 (tiles: arrives in M4)";
+    case 2:
+        return "Mode 2 (tiles: arrives in M4)";
+    case 3:
+        return "Mode 3 (bitmap)";
+    case 4:
+        return "Mode 4 (paletted bitmap)";
+    case 5:
+        return "Mode 5 (small bitmap)";
+    default:
+        return "Invalid mode";
+    }
 }
 
 [[nodiscard]] ImTextureID texture_id(SDL_Texture* texture) noexcept {
@@ -145,6 +175,7 @@ bool Application::initialize() {
 }
 
 void Application::shutdown() noexcept {
+    input_.close_all();
     if (imgui_renderer_initialized_) {
         ImGui_ImplSDLRenderer3_Shutdown();
         imgui_renderer_initialized_ = false;
@@ -180,6 +211,7 @@ void Application::process_events() {
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL3_ProcessEvent(&event);
+        input_.handle_event(event);
 
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
             should_quit_ = true;
@@ -234,7 +266,53 @@ void Application::process_file_dialog_result() {
 }
 
 void Application::update() {
-    emulator_.run_frame();
+    const auto now = SDL_GetTicksNS();
+    const auto elapsed = last_update_ns_ == 0 ? std::uint64_t{0} : now - last_update_ns_;
+    last_update_ns_ = now;
+
+    auto& io = ImGui::GetIO();
+    const bool playing = emulator_.state() == core::RunState::Running;
+    // While a game runs, controller and arrow-key input belong to the game, not menu navigation.
+    if (playing) {
+        io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
+    } else {
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+    }
+    emulator_.set_pressed_keys(input_.pressed_keys(!io.WantTextInput));
+
+    if (!playing) {
+        frame_time_accumulator_ns_ = 0;
+    } else {
+        // Run emulated frames at the GBA's own refresh rate regardless of the monitor's.
+        frame_time_accumulator_ns_ = std::min(frame_time_accumulator_ns_ + elapsed,
+                                              kNanosecondsPerFrame * kMaxCatchUpFrames);
+    }
+
+    bool produced_frame = false;
+    while (frame_time_accumulator_ns_ >= kNanosecondsPerFrame &&
+           emulator_.state() == core::RunState::Running) {
+        emulator_.run_frame();
+        frame_time_accumulator_ns_ -= kNanosecondsPerFrame;
+        produced_frame = true;
+    }
+
+    if (const auto& fault = emulator_.fault(); fault && !fault_reported_) {
+        char message[160]{};
+        std::snprintf(message, sizeof(message),
+                      "Emulation stopped: unsupported %s instruction %0*X at %08X",
+                      fault->instruction_set == core::InstructionSet::Arm ? "ARM" : "Thumb",
+                      fault->instruction_set == core::InstructionSet::Arm ? 8 : 4,
+                      static_cast<unsigned>(fault->opcode), static_cast<unsigned>(fault->address));
+        status_message_ = message;
+        status_is_error_ = true;
+        fault_reported_ = true;
+    } else if (!fault) {
+        fault_reported_ = false;
+    }
+
+    if (!produced_frame && emulator_.has_rom() && emulator_.frame_counter() > 0) {
+        return;
+    }
     const auto& framebuffer = emulator_.framebuffer();
     const auto pitch = static_cast<int>(core::kScreenWidth * sizeof(core::Rgba8));
     if (!SDL_UpdateTexture(framebuffer_texture_, nullptr, framebuffer.data(), pitch)) {
@@ -356,11 +434,12 @@ void Application::draw_landing_page() {
     ImGui::SetWindowFontScale(2.2F);
     ImGui::TextUnformatted("SRGBA");
     ImGui::SetWindowFontScale(1.0F);
-    ImGui::TextDisabled("Game Boy Advance emulator - M2 bus and boot build");
+    ImGui::TextDisabled("Game Boy Advance emulator %s - M3 timing and bitmap video", kVersion);
     ImGui::Spacing();
     ImGui::TextWrapped(
-        "Open a legally obtained .gba ROM to run it through the ARM7TDMI interpreter and GBA "
-        "memory bus. Video output remains a diagnostic placeholder until the next milestone.");
+        "Open a legally obtained .gba ROM, or try the SRGBA demo in the samples folder. This "
+        "build runs games with interrupts, input, and bitmap video modes 3-5; tile graphics "
+        "(used by most commercial games), sound, and saves arrive in later milestones.");
     ImGui::Spacing();
 
     if (ImGui::Button("Open GBA ROM", ImVec2(190.0F, 42.0F))) {
@@ -416,9 +495,14 @@ void Application::draw_game_view() {
     }
 
     ImGui::Separator();
-    ImGui::TextDisabled("M2 CPU/bus execution - placeholder video (PC %08X, %llu instructions)",
+    const auto display_control = emulator_.bus().io_register16(0x000U);
+    ImGui::TextDisabled("%s  |  frame %llu  |  PC %08X%s", describe_display_mode(display_control),
+                        static_cast<unsigned long long>(emulator_.frame_counter()),
                         static_cast<unsigned>(emulator_.cpu().program_counter()),
-                        static_cast<unsigned long long>(emulator_.instruction_counter()));
+                        emulator_.is_halted() ? " (halted)" : "");
+    if (emulator_.fault()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.38F, 0.36F, 1.0F), "%s", status_message_.c_str());
+    }
 
     const auto available = ImGui::GetContentRegionAvail();
     const auto width_scale = available.x / static_cast<float>(core::kScreenWidth);
@@ -439,7 +523,7 @@ void Application::draw_game_view() {
 }
 
 void Application::draw_settings_window() {
-    ImGui::SetNextWindowSize(ImVec2(470.0F, 390.0F), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520.0F, 560.0F), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Settings", &show_settings_)) {
         ImGui::End();
         return;
@@ -481,15 +565,35 @@ void Application::draw_settings_window() {
         ImGui::TextDisabled("BIOS: %s (CRC32 %08X)", bios_path.filename().string().c_str(),
                             static_cast<unsigned>(emulator_.bus().bios_crc32()));
     } else {
-        ImGui::TextDisabled("No BIOS loaded; SRGBA will use direct boot.");
+        ImGui::TextDisabled("No BIOS loaded; SRGBA uses direct boot and its built-in BIOS.");
     }
     if (ImGui::Button("Choose BIOS...")) {
         request_open_bios();
     }
 
     ImGui::Spacing();
-    ImGui::SeparatorText("Input");
-    ImGui::TextDisabled("Keyboard and controller remapping will be added with keypad emulation.");
+    ImGui::SeparatorText("Controls");
+    if (ImGui::BeginTable("Controls", 3,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                              ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("GBA");
+        ImGui::TableSetupColumn("Keyboard");
+        ImGui::TableSetupColumn("Controller");
+        ImGui::TableHeadersRow();
+        for (const auto& binding : InputMapper::bindings()) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(binding.gba_button);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(binding.keyboard);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(binding.controller);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("Controllers connected: %zu. Remapping arrives in M6.",
+                        input_.gamepad_count());
+    ImGui::Spacing();
     ImGui::BulletText("Ctrl+O: Open ROM");
     ImGui::BulletText("Space: Pause or resume");
     ImGui::BulletText("F11: Toggle fullscreen");
@@ -505,12 +609,12 @@ void Application::draw_about_window() {
     }
 
     ImGui::SetWindowFontScale(1.5F);
-    ImGui::TextUnformatted("SRGBA 0.3.0");
+    ImGui::Text("SRGBA %s", kVersion);
     ImGui::SetWindowFontScale(1.0F);
     ImGui::TextWrapped(
         "A clean-room Game Boy Advance emulator project built with C++20, SDL3, and Dear ImGui.");
     ImGui::Spacing();
-    ImGui::TextDisabled("Current status: M2 ARM7TDMI bus and boot foundation");
+    ImGui::TextDisabled("Current status: M3 scheduling, interrupts, input, and bitmap video");
     ImGui::TextDisabled("License: MIT");
     ImGui::Spacing();
     ImGui::TextWrapped("SRGBA does not include commercial ROMs or Nintendo BIOS files.");

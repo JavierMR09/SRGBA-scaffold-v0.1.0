@@ -40,6 +40,22 @@ namespace {
     return {value, false};
 }
 
+// ARM7TDMI multipliers terminate early once the remaining multiplier bits are all zero (or, for
+// signed operations, all ones). The result is the number of internal "m" cycles.
+[[nodiscard]] constexpr std::uint32_t multiply_cycles(const std::uint32_t multiplier,
+                                                      const bool signed_operation) noexcept {
+    std::uint32_t cycles = 1;
+    for (unsigned shift = 8; shift < 32U; shift += 8U) {
+        const auto upper = multiplier >> shift;
+        const auto all_ones = (~0U) >> shift;
+        if (upper == 0U || (signed_operation && upper == all_ones)) {
+            break;
+        }
+        ++cycles;
+    }
+    return cycles;
+}
+
 } // namespace
 
 bool is_valid_processor_mode(const std::uint32_t value) noexcept {
@@ -649,19 +665,28 @@ ExecutionResult Arm7Tdmi::execute_arm_block_transfer(const std::uint32_t instruc
                                                      GbaBus& bus) noexcept {
     const bool pre_indexed = bit(instruction, 24);
     const bool increment = bit(instruction, 23);
-    const bool load_psr_or_user_bank = bit(instruction, 22);
+    const bool psr_or_user_bank = bit(instruction, 22);
     const bool write_back = bit(instruction, 21);
     const bool load = bit(instruction, 20);
     const auto base_register = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
     const auto register_list = static_cast<std::uint16_t>(instruction);
     const auto register_count = static_cast<std::uint32_t>(std::popcount(register_list));
 
-    if (register_list == 0U || load_psr_or_user_bank || base_register == kProgramCounter ||
-        (load && write_back && bit(register_list, static_cast<unsigned>(base_register)))) {
+    if (register_list == 0U || base_register == kProgramCounter) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    const bool loads_program_counter = load && bit(register_list, kProgramCounter);
+    // With the S bit set, LDM including r15 restores CPSR from SPSR. Every other S-bit form
+    // transfers the User-mode register bank regardless of the current mode.
+    const bool restores_status = psr_or_user_bank && loads_program_counter;
+    const bool uses_user_bank = psr_or_user_bank && !loads_program_counter;
+    if (restores_status && current_spsr() == nullptr) {
         return status(ExecutionStatus::UnsupportedInstruction);
     }
 
     const auto base = register_value(base_register);
+    const auto updated_base = increment ? base + register_count * 4U : base - register_count * 4U;
     std::uint32_t address = 0;
     if (increment) {
         address = pre_indexed ? base + 4U : base;
@@ -669,9 +694,9 @@ ExecutionResult Arm7Tdmi::execute_arm_block_transfer(const std::uint32_t instruc
         address = pre_indexed ? base - register_count * 4U : base - (register_count - 1U) * 4U;
     }
 
+    const auto lowest_register = static_cast<std::size_t>(std::countr_zero(register_list));
     std::uint32_t cycles = 0;
     bool first_access = true;
-    bool loaded_program_counter = false;
     std::uint32_t loaded_pc_value = 0;
     for (std::size_t register_index = 0; register_index < kRegisterCount; ++register_index) {
         if (!bit(register_list, static_cast<unsigned>(register_index))) {
@@ -685,33 +710,237 @@ ExecutionResult Arm7Tdmi::execute_arm_block_transfer(const std::uint32_t instruc
         first_access = false;
 
         if (load) {
-            const auto read = bus.read32(address, access);
+            const auto read = bus.read32(address & ~3U, access);
             cycles += read.cycles;
             if (register_index == kProgramCounter) {
-                loaded_program_counter = true;
                 loaded_pc_value = read.value;
+            } else if (uses_user_bank) {
+                set_user_register(register_index, read.value);
             } else {
                 set_register(register_index, read.value);
             }
         } else {
-            const auto value = register_index == kProgramCounter ? program_counter_ + 12U
-                                                                 : register_value(register_index);
-            cycles += bus.write32(address, value, access).cycles;
+            std::uint32_t value = 0;
+            if (register_index == kProgramCounter) {
+                value = program_counter_ + 12U;
+            } else if (write_back && register_index == base_register &&
+                       register_index != lowest_register) {
+                // STM stores the original base only when it is the first register written.
+                value = updated_base;
+            } else {
+                value = uses_user_bank ? user_register_value(register_index)
+                                       : register_value(register_index);
+            }
+            cycles += bus.write32(address & ~3U, value, access).cycles;
         }
         address += 4U;
     }
 
-    if (write_back) {
-        const auto updated_base =
-            increment ? base + register_count * 4U : base - register_count * 4U;
+    // A load that includes the base register overrides the written-back address.
+    const bool base_was_loaded = load && bit(register_list, static_cast<unsigned>(base_register));
+    if (write_back && !base_was_loaded) {
         set_register(base_register, updated_base);
     }
-    if (loaded_program_counter) {
+    if (loads_program_counter) {
+        if (restores_status) {
+            const auto assigned = cpsr_.assign(current_spsr()->value());
+            static_cast<void>(assigned);
+        }
         branch_to(loaded_pc_value);
         return executed(true, cycles + 1U);
     }
     advance_arm();
     return executed(false, cycles + static_cast<std::uint32_t>(load));
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_multiply(const std::uint32_t instruction) noexcept {
+    const bool accumulate = bit(instruction, 21);
+    const bool set_flags = bit(instruction, 20);
+    const auto destination = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
+    const auto accumulator = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
+    const auto multiplier = register_value((instruction >> 8U) & 0xFU);
+    const auto multiplicand = register_value(instruction & 0xFU);
+    if (destination == kProgramCounter) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    auto result = multiplicand * multiplier;
+    if (accumulate) {
+        result += register_value(accumulator);
+    }
+    set_register(destination, result);
+    if (set_flags) {
+        // ARMv4 leaves the carry flag in an unpredictable state; SRGBA preserves it.
+        set_nz(result);
+    }
+    advance_arm();
+    return executed(false,
+                    multiply_cycles(multiplier, true) + static_cast<std::uint32_t>(accumulate));
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_long_multiply(const std::uint32_t instruction) noexcept {
+    const bool signed_operation = bit(instruction, 22);
+    const bool accumulate = bit(instruction, 21);
+    const bool set_flags = bit(instruction, 20);
+    const auto high_register = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
+    const auto low_register = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
+    const auto multiplier = register_value((instruction >> 8U) & 0xFU);
+    const auto multiplicand = register_value(instruction & 0xFU);
+    if (high_register == kProgramCounter || low_register == kProgramCounter) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    std::uint64_t result = 0;
+    if (signed_operation) {
+        const auto product = static_cast<std::int64_t>(static_cast<std::int32_t>(multiplicand)) *
+                             static_cast<std::int64_t>(static_cast<std::int32_t>(multiplier));
+        result = static_cast<std::uint64_t>(product);
+    } else {
+        result = static_cast<std::uint64_t>(multiplicand) * multiplier;
+    }
+    if (accumulate) {
+        const auto addend = (static_cast<std::uint64_t>(register_value(high_register)) << 32U) |
+                            register_value(low_register);
+        result += addend;
+    }
+
+    set_register(low_register, static_cast<std::uint32_t>(result));
+    set_register(high_register, static_cast<std::uint32_t>(result >> 32U));
+    if (set_flags) {
+        cpsr_.set_negative(((result >> 63U) & 1U) != 0U);
+        cpsr_.set_zero(result == 0U);
+    }
+    advance_arm();
+    return executed(false, multiply_cycles(multiplier, signed_operation) + 1U +
+                               static_cast<std::uint32_t>(accumulate));
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_swap(const std::uint32_t instruction, GbaBus& bus) noexcept {
+    const bool byte_swap = bit(instruction, 22);
+    const auto base_register = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
+    const auto destination = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
+    const auto source = static_cast<std::size_t>(instruction & 0xFU);
+    if (base_register == kProgramCounter || destination == kProgramCounter ||
+        source == kProgramCounter) {
+        return status(ExecutionStatus::UnsupportedInstruction);
+    }
+
+    const auto address = register_value(base_register);
+    const auto stored = register_value(source);
+    const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+    std::uint32_t cycles = 0;
+    std::uint32_t loaded = 0;
+    if (byte_swap) {
+        const auto read = bus.read8(address, access);
+        loaded = read.value & 0xFFU;
+        cycles += read.cycles;
+        cycles += bus.write8(address, static_cast<std::uint8_t>(stored), access).cycles;
+    } else {
+        const auto read = bus.read32(address, access);
+        loaded = read.value;
+        cycles += read.cycles;
+        cycles += bus.write32(address, stored, access).cycles;
+    }
+    set_register(destination, loaded);
+    advance_arm();
+    return executed(false, cycles + 1U);
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_status_transfer(const std::uint32_t instruction) noexcept {
+    const bool use_spsr = bit(instruction, 22);
+
+    // MRS Rd, CPSR/SPSR
+    if ((instruction & 0x0FBF0FFFU) == 0x010F0000U) {
+        const auto destination = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
+        if (destination == kProgramCounter) {
+            return status(ExecutionStatus::UnsupportedInstruction);
+        }
+        std::uint32_t value = cpsr_.value();
+        if (use_spsr) {
+            const auto* saved = current_spsr();
+            // User and System modes have no SPSR; reading one returns CPSR on the ARM7TDMI.
+            value = saved ? saved->value() : cpsr_.value();
+        }
+        set_register(destination, value);
+        advance_arm();
+        return executed();
+    }
+
+    // MSR CPSR/SPSR_<fields>, Rm or #immediate
+    if ((instruction & 0x0DB0F000U) == 0x0120F000U) {
+        std::uint32_t operand = 0;
+        if (bit(instruction, 25)) {
+            const auto immediate = instruction & 0xFFU;
+            const auto rotation = static_cast<int>(((instruction >> 8U) & 0xFU) * 2U);
+            operand = std::rotr(immediate, rotation);
+        } else {
+            if ((instruction & 0xFU) == kProgramCounter) {
+                return status(ExecutionStatus::UnsupportedInstruction);
+            }
+            operand = register_value(instruction & 0xFU);
+        }
+
+        std::uint32_t field_mask = 0;
+        if (bit(instruction, 16)) {
+            field_mask |= 0x000000FFU;
+        }
+        if (bit(instruction, 17)) {
+            field_mask |= 0x0000FF00U;
+        }
+        if (bit(instruction, 18)) {
+            field_mask |= 0x00FF0000U;
+        }
+        if (bit(instruction, 19)) {
+            field_mask |= 0xFF000000U;
+        }
+
+        if (use_spsr) {
+            auto* saved = current_spsr();
+            if (saved) {
+                const auto updated = (saved->value() & ~field_mask) | (operand & field_mask);
+                static_cast<void>(saved->assign(updated));
+            }
+        } else {
+            if (cpsr_.mode() == ProcessorMode::User) {
+                field_mask &= 0xFF000000U;
+            }
+            // The T bit cannot be changed with MSR; only BX and exception returns switch state.
+            field_mask &= ~ProgramStatusRegister::kThumbMask;
+            const auto updated = (cpsr_.value() & ~field_mask) | (operand & field_mask);
+            static_cast<void>(cpsr_.assign(updated));
+        }
+        advance_arm();
+        return executed();
+    }
+
+    return status(ExecutionStatus::UnsupportedInstruction);
+}
+
+std::uint32_t Arm7Tdmi::user_register_value(const std::size_t index) const noexcept {
+    assert(index < kRegisterCount);
+    if (index < 8U) {
+        return low_registers_[index];
+    }
+    if (index < 13U) {
+        return user_high_registers_[index - 8U];
+    }
+    if (index < 15U) {
+        return user_sp_lr_[index - 13U];
+    }
+    return program_counter_;
+}
+
+void Arm7Tdmi::set_user_register(const std::size_t index, const std::uint32_t value) noexcept {
+    assert(index < kRegisterCount);
+    if (index < 8U) {
+        low_registers_[index] = value;
+    } else if (index < 13U) {
+        user_high_registers_[index - 8U] = value;
+    } else if (index < 15U) {
+        user_sp_lr_[index - 13U] = value;
+    } else {
+        program_counter_ = value;
+    }
 }
 
 ExecutionResult Arm7Tdmi::execute_arm(const std::uint32_t instruction) noexcept {
@@ -808,11 +1037,22 @@ ExecutionResult Arm7Tdmi::execute_arm_impl(const std::uint32_t instruction,
         return status(ExecutionStatus::UnsupportedInstruction);
     }
 
-    // Multiply and halfword-transfer encodings overlap the data-processing class.
+    // Multiply, swap, and halfword-transfer encodings overlap the data-processing class.
     if ((instruction & 0x0E000090U) == 0x00000090U) {
         const bool halfword_or_signed_transfer = (instruction & 0x60U) != 0U;
-        if (halfword_or_signed_transfer && bus) {
-            return execute_arm_halfword_transfer(instruction, *bus);
+        if (halfword_or_signed_transfer) {
+            return bus ? execute_arm_halfword_transfer(instruction, *bus)
+                       : status(ExecutionStatus::UnsupportedInstruction);
+        }
+        if ((instruction & 0x0FC000F0U) == 0x00000090U) {
+            return execute_arm_multiply(instruction);
+        }
+        if ((instruction & 0x0F8000F0U) == 0x00800090U) {
+            return execute_arm_long_multiply(instruction);
+        }
+        if ((instruction & 0x0FB00FF0U) == 0x01000090U) {
+            return bus ? execute_arm_swap(instruction, *bus)
+                       : status(ExecutionStatus::UnsupportedInstruction);
         }
         return status(ExecutionStatus::UnsupportedInstruction);
     }
@@ -821,7 +1061,8 @@ ExecutionResult Arm7Tdmi::execute_arm_impl(const std::uint32_t instruction,
     const auto set_flags = bit(instruction, 20);
     const auto test_operation = opcode >= 8U && opcode <= 11U;
     if (test_operation && !set_flags) {
-        return status(ExecutionStatus::UnsupportedInstruction);
+        // TST/TEQ/CMP/CMN without S encode the PSR transfer instructions.
+        return execute_arm_status_transfer(instruction);
     }
 
     const auto destination = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
@@ -1294,12 +1535,13 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
         const auto base_register = static_cast<std::size_t>((instruction >> 8U) & 0x7U);
         const auto register_list = static_cast<std::uint8_t>(instruction);
         const auto register_count = static_cast<std::uint32_t>(std::popcount(register_list));
-        if (register_list == 0U ||
-            (load && bit(register_list, static_cast<unsigned>(base_register)))) {
+        if (register_list == 0U) {
             return status(ExecutionStatus::UnsupportedInstruction);
         }
+        const auto base_value = register_value(base_register);
+        const auto lowest_register = static_cast<std::size_t>(std::countr_zero(register_list));
 
-        auto address = register_value(base_register);
+        auto address = base_value;
         std::uint32_t cycles = 0;
         bool first_access = true;
         for (std::size_t register_index = 0; register_index < 8U; ++register_index) {
@@ -1317,11 +1559,18 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
                 cycles += read.cycles;
                 set_register(register_index, read.value);
             } else {
-                cycles += bus->write32(address, register_value(register_index), access).cycles;
+                // STMIA stores the original base only when it is the lowest listed register.
+                const auto value =
+                    register_index == base_register && register_index != lowest_register
+                        ? base_value + register_count * 4U
+                        : register_value(register_index);
+                cycles += bus->write32(address, value, access).cycles;
             }
             address += 4U;
         }
-        set_register(base_register, register_value(base_register) + register_count * 4U);
+        if (!load || !bit(register_list, static_cast<unsigned>(base_register))) {
+            set_register(base_register, base_value + register_count * 4U);
+        }
         advance_thumb();
         return executed(false, cycles + static_cast<std::uint32_t>(load));
     }
@@ -1335,6 +1584,7 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
         const auto right = register_value(source);
         std::uint32_t value = 0;
         bool write_result = true;
+        std::uint32_t internal_cycles = 0;
 
         switch (operation) {
         case 0x0: // AND
@@ -1415,6 +1665,7 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
         case 0xD: // MUL
             value = static_cast<std::uint32_t>(static_cast<std::uint64_t>(left) * right);
             set_nz(value);
+            internal_cycles = multiply_cycles(left, true);
             break;
         case 0xE: // BIC
             value = left & ~right;
@@ -1432,7 +1683,7 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
             set_register(destination, value);
         }
         advance_thumb();
-        return executed();
+        return executed(false, internal_cycles);
     }
 
     // Format 3: move, compare, add, and subtract an eight-bit immediate.
@@ -1565,6 +1816,13 @@ void Arm7Tdmi::take_exception(const ExceptionType exception) noexcept {
 
     set_register(kLinkRegister, return_address);
     branch_to(vector);
+}
+
+void Arm7Tdmi::return_from_exception(const std::uint32_t address) noexcept {
+    if (const auto* saved = current_spsr(); saved != nullptr) {
+        static_cast<void>(cpsr_.assign(saved->value()));
+    }
+    branch_to(address);
 }
 
 bool Arm7Tdmi::try_take_irq() noexcept {

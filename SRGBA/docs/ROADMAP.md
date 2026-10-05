@@ -31,20 +31,23 @@
 - [x] Post-BIOS development boot path
 - [x] First CPU-focused homebrew test ROM
 
-## M3 - Scheduling and basic video (next)
+## M3 - Scheduling and basic video (complete)
 
-- [ ] Master-cycle scheduler
-- [ ] Scanline, HBlank, VBlank, and VCount timing
-- [ ] Interrupt controller
-- [ ] Keypad registers and frontend mapping
-- [ ] Bitmap modes 3, 4, and 5
-- [ ] First interactive homebrew output
+- [x] Master-cycle scheduler
+- [x] Scanline, HBlank, VBlank, and VCount timing
+- [x] Interrupt controller
+- [x] Keypad registers and frontend mapping
+- [x] Bitmap modes 3, 4, and 5
+- [x] First interactive homebrew output (bundled `samples/SRGBA-demo.gba`)
+- [x] ARM PSR transfer, multiply, long multiply, swap, and user-bank block transfers
+- [x] Built-in replacement BIOS with HLE software interrupts
 
-## M4 - DMA, timers, and complete PPU
+## M4 - DMA, timers, and complete PPU (next)
 
 - [ ] Four DMA channels and trigger timing
 - [ ] Four hardware timers and cascading
-- [ ] Regular and affine backgrounds
+- [ ] Regular and affine backgrounds (including affine BG2 in bitmap modes)
+- [ ] Game Pak prefetch buffer timing
 - [ ] Sprites and object attributes
 - [ ] Windows, blending, mosaic, and layer priority
 - [ ] PPU regression suite

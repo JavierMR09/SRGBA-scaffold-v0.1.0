@@ -162,6 +162,9 @@ class Arm7Tdmi {
     [[nodiscard]] ExecutionResult step(GbaBus& bus) noexcept;
 
     void take_exception(ExceptionType exception) noexcept;
+    // Restores CPSR from the current mode's SPSR and resumes at `address`, matching
+    // "MOVS pc, lr". Used by the HLE BIOS to finish software interrupts.
+    void return_from_exception(std::uint32_t address) noexcept;
     [[nodiscard]] bool try_take_irq() noexcept;
     [[nodiscard]] bool try_take_fiq() noexcept;
 
@@ -184,6 +187,12 @@ class Arm7Tdmi {
                                                                 GbaBus& bus) noexcept;
     [[nodiscard]] ExecutionResult execute_arm_block_transfer(std::uint32_t instruction,
                                                              GbaBus& bus) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_multiply(std::uint32_t instruction) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_long_multiply(std::uint32_t instruction) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_swap(std::uint32_t instruction, GbaBus& bus) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_status_transfer(std::uint32_t instruction) noexcept;
+    [[nodiscard]] std::uint32_t user_register_value(std::size_t index) const noexcept;
+    void set_user_register(std::size_t index, std::uint32_t value) noexcept;
     void branch_to(std::uint32_t target) noexcept;
     void advance_arm() noexcept;
     void advance_thumb() noexcept;
