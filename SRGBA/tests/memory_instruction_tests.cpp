@@ -200,9 +200,11 @@ TEST_CASE("CPU step fetches instructions and tracks Game Pak access cycles", "[c
     bus.set_game_pak(code);
     cpu.set_program_counter(GbaBus::kGamePakStart);
 
+    // The first step refills the empty pipeline (N + S) and fetches two slots ahead (S):
+    // 8 + 6 + 6 cycles with the default 4/2 wait states.
     auto result = cpu.step(bus);
     REQUIRE(result.executed());
-    REQUIRE(result.cycles == 8U);
+    REQUIRE(result.cycles == 20U);
     REQUIRE(cpu.register_value(0) == 42U);
     REQUIRE(cpu.program_counter() == GbaBus::kGamePakStart + 4U);
 
@@ -210,4 +212,36 @@ TEST_CASE("CPU step fetches instructions and tracks Game Pak access cycles", "[c
     REQUIRE(result.executed());
     REQUIRE(result.cycles == 6U);
     REQUIRE(cpu.register_value(0) == 43U);
+
+    // With the prefetch buffer enabled, sequential opcode fetches cost one cycle per halfword.
+    static_cast<void>(bus.write16(0x04000204U, 0x4000U));
+    cpu.set_program_counter(GbaBus::kGamePakStart);
+    result = cpu.step(bus);
+    REQUIRE(result.cycles == 8U + 6U + 2U);
+    result = cpu.step(bus);
+    REQUIRE(result.cycles == 2U);
+}
+
+TEST_CASE("Stores into already-fetched opcodes do not change execution", "[cpu][pipeline]") {
+    Arm7Tdmi cpu;
+    GbaBus bus;
+    // 0x03000000: STR r1, [r0]       ; overwrite the instruction two slots ahead
+    // 0x03000004: MOV r2, #1
+    // 0x03000008: MOV r3, #2         ; already fetched when the STR executes
+    static_cast<void>(bus.write32(0x03000000U, 0xE5801000U));
+    static_cast<void>(bus.write32(0x03000004U, 0xE3A02001U));
+    static_cast<void>(bus.write32(0x03000008U, 0xE3A03002U));
+    cpu.set_register(0, 0x03000008U);
+    cpu.set_register(1, 0xE3A03063U); // MOV r3, #99
+    cpu.set_program_counter(0x03000000U);
+
+    for (int instruction = 0; instruction < 3; ++instruction) {
+        REQUIRE(cpu.step(bus).executed());
+    }
+    REQUIRE(cpu.register_value(3) == 2U);
+
+    // After a branch the pipeline is refilled from memory and sees the new opcode.
+    cpu.set_program_counter(0x03000008U);
+    REQUIRE(cpu.step(bus).executed());
+    REQUIRE(cpu.register_value(3) == 99U);
 }

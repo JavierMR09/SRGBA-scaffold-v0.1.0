@@ -26,11 +26,13 @@ add_library(
     srgba_core
     src/core/arm7tdmi.cpp
     src/core/cartridge.cpp
+    src/core/dma.cpp
     src/core/emulator.cpp
     src/core/gba_bus.cpp
     src/core/hle_bios.cpp
     src/core/ppu.cpp
     src/core/system_bios.cpp
+    src/core/timers.cpp
 )
 add_library(SRGBA::core ALIAS srgba_core)
 
@@ -149,10 +151,12 @@ if(SRGBA_BUILD_TESTS)
         tests/hle_bios_tests.cpp
         tests/interrupt_keypad_tests.cpp
         tests/memory_instruction_tests.cpp
+        tests/ppu_scene_tests.cpp
         tests/ppu_tests.cpp
         tests/rom_header_tests.cpp
         tests/scheduler_tests.cpp
         tests/thumb_instruction_tests.cpp
+        tests/timer_dma_tests.cpp
     )
     target_compile_features(srgba_tests PRIVATE cxx_std_20)
     target_include_directories(srgba_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")

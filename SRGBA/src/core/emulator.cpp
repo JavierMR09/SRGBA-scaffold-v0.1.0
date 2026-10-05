@@ -16,6 +16,7 @@ static_assert(kMasterCyclesPerFrame == 280896U);
 } // namespace
 
 Emulator::Emulator() {
+    bus_.attach_scheduler(scheduler_);
     render_idle_frame();
 }
 
@@ -114,7 +115,8 @@ std::optional<ExecutionResult> Emulator::step_instruction() noexcept {
             state_ = RunState::Paused;
             return result;
         }
-        scheduler_.advance(std::max(result.cycles, 1U));
+        // Immediate DMA started by this instruction runs before the next one.
+        scheduler_.advance(std::max(result.cycles, 1U) + bus_.take_dma_cycles());
     }
 
     if (bus_.take_halt_request()) {
@@ -251,17 +253,34 @@ void Emulator::reset_machine() noexcept {
 }
 
 void Emulator::process_events() noexcept {
-    while (const auto event = scheduler_.pop_due()) {
-        switch (event->type) {
-        case EventType::HBlankStart:
-            ppu_.on_hblank_start(bus_, scheduler_, event->timestamp, framebuffer_);
-            break;
-        case EventType::ScanlineEnd:
-            ppu_.on_scanline_end(bus_, scheduler_, event->timestamp);
-            break;
-        case EventType::Count:
-            break;
+    for (;;) {
+        while (const auto event = scheduler_.pop_due()) {
+            switch (event->type) {
+            case EventType::HBlankStart:
+                ppu_.on_hblank_start(bus_, scheduler_, event->timestamp, framebuffer_);
+                break;
+            case EventType::ScanlineEnd:
+                ppu_.on_scanline_end(bus_, scheduler_, event->timestamp);
+                break;
+            case EventType::Timer0Overflow:
+            case EventType::Timer1Overflow:
+            case EventType::Timer2Overflow:
+            case EventType::Timer3Overflow:
+                static_cast<void>(
+                    bus_.on_timer_overflow(static_cast<std::size_t>(event->type) -
+                                               static_cast<std::size_t>(EventType::Timer0Overflow),
+                                           event->timestamp));
+                break;
+            case EventType::Count:
+                break;
+            }
         }
+        // DMA transfers stall the CPU; time spent in them can make further events due.
+        const auto stall = bus_.take_dma_cycles();
+        if (stall == 0U) {
+            return;
+        }
+        scheduler_.advance(stall);
     }
 }
 

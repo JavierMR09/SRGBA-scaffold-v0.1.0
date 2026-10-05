@@ -16,7 +16,7 @@ namespace builtin_bios {
 inline constexpr std::size_t kImageSize = 16U * 1024U;
 inline constexpr std::uint32_t kSoftwareInterruptVector = 0x00000008U;
 inline constexpr std::uint32_t kIrqVector = 0x00000018U;
-inline constexpr std::uint32_t kIntrWaitRoutine = 0x00000030U;
+inline constexpr std::uint32_t kIntrWaitRoutine = 0x00000038U;
 // The opcode the real BIOS leaves in the protection latch after returning from an SWI.
 inline constexpr std::uint32_t kSwiReturnLatch = 0xE3A02004U;
 

@@ -1,6 +1,9 @@
 #pragma once
 
+#include "srgba/core/dma.hpp"
 #include "srgba/core/interrupts.hpp"
+#include "srgba/core/scheduler.hpp"
+#include "srgba/core/timers.hpp"
 
 #include <array>
 #include <cstddef>
@@ -26,6 +29,9 @@ struct BusAccess {
     AccessSequence sequence{AccessSequence::NonSequential};
     AccessKind kind{AccessKind::Data};
     std::uint32_t program_counter{0xFFFFFFFFU};
+    // True for the opcode fetches that refill the CPU pipeline after a branch. The Game Pak
+    // prefetch buffer is empty at that point, so these always pay full wait states.
+    bool pipeline_refill{false};
 };
 
 struct BusReadResult {
@@ -57,6 +63,16 @@ class GbaBus {
     static constexpr std::uint32_t kGamePakStart = 0x08000000U;
 
     GbaBus() noexcept;
+    GbaBus(const GbaBus&) = delete;
+    GbaBus& operator=(const GbaBus&) = delete;
+    GbaBus(GbaBus&&) = delete;
+    GbaBus& operator=(GbaBus&&) = delete;
+    ~GbaBus() = default;
+
+    // Timers schedule overflow events on the machine's master clock. A bus used on its own (for
+    // example in unit tests) runs against a private scheduler instead.
+    void attach_scheduler(Scheduler& scheduler) noexcept;
+    [[nodiscard]] Scheduler& scheduler() noexcept;
 
     // Clears volatile machine state while preserving attached BIOS and cartridge images.
     void reset() noexcept;
@@ -109,6 +125,18 @@ class GbaBus {
     void set_pressed_keys(std::uint16_t pressed) noexcept;
     [[nodiscard]] std::uint16_t key_input() const noexcept;
 
+    // Timers and DMA.
+    [[nodiscard]] Timers& timers() noexcept;
+    [[nodiscard]] const Timers& timers() const noexcept;
+    [[nodiscard]] DmaController& dma() noexcept;
+    std::uint8_t on_timer_overflow(std::size_t index, std::uint64_t timestamp) noexcept;
+    void trigger_dma(DmaTiming timing) noexcept;
+    [[nodiscard]] std::uint32_t take_dma_cycles() noexcept;
+
+    // Returns true once after the CPU writes BG2X/BG2Y (background 0) or BG3X/BG3Y (1); the PPU
+    // then reloads its internal affine reference point.
+    [[nodiscard]] bool take_affine_reload(std::size_t background) noexcept;
+
     // Video-facing views used by the PPU.
     [[nodiscard]] std::uint16_t io_register16(std::uint32_t offset) const noexcept;
     void set_display_status_flags(std::uint8_t flags) noexcept;
@@ -137,6 +165,12 @@ class GbaBus {
     [[nodiscard]] static std::size_t vram_offset(std::uint32_t address) noexcept;
     [[nodiscard]] static std::uint32_t crc32(std::span<const std::uint8_t> bytes) noexcept;
 
+    // Direct pointers into plain memory for aligned 16/32-bit accesses (nullptr when the access
+    // needs the general path: BIOS, IO, SRAM, unmapped space, or past the end of the ROM).
+    [[nodiscard]] const std::uint8_t* fast_read_pointer(std::uint32_t aligned_address,
+                                                        std::size_t access_width) const noexcept;
+    [[nodiscard]] std::uint8_t* fast_write_pointer(std::uint32_t aligned_address) noexcept;
+
     [[nodiscard]] std::uint8_t read_byte(std::uint32_t address, const BusAccess& access,
                                          bool& mapped) noexcept;
     void write_byte(std::uint32_t address, std::uint8_t value, std::size_t access_width) noexcept;
@@ -147,6 +181,8 @@ class GbaBus {
                                               AccessSequence sequence) const noexcept;
     [[nodiscard]] std::uint32_t game_pak_cycles(std::uint32_t address, std::size_t access_width,
                                                 AccessSequence sequence) const noexcept;
+    [[nodiscard]] std::uint32_t fetch_cycles(std::uint32_t address, std::size_t access_width,
+                                             const BusAccess& access) const noexcept;
     void update_keypad_interrupt() noexcept;
 
     std::vector<std::uint8_t> bios_;
@@ -165,6 +201,11 @@ class GbaBus {
     std::uint32_t open_bus_{};
     std::uint16_t key_input_{kKeyMask};
     bool halt_requested_{};
+    std::array<bool, 2> affine_reload_{};
+    Scheduler own_scheduler_{};
+    Scheduler* scheduler_{&own_scheduler_};
+    Timers timers_{};
+    DmaController dma_{};
 };
 
 } // namespace srgba::core

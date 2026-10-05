@@ -13,10 +13,31 @@ using srgba::core::Framebuffer;
 using srgba::core::GbaBus;
 using srgba::core::Ppu;
 using srgba::core::Rgba8;
+using srgba::core::Scheduler;
 
 namespace {
 
 constexpr Rgba8 kWhite{255, 255, 255, 255};
+
+// A bus in the post-BIOS state (identity affine parameters for BG2/BG3).
+struct VideoFixture {
+    VideoFixture() {
+        bus.initialize_post_bios();
+    }
+
+    Framebuffer& render() {
+        ppu.render_frame(bus, framebuffer);
+        return framebuffer;
+    }
+
+    [[nodiscard]] Rgba8 pixel(const std::size_t x, const std::size_t y) const {
+        return framebuffer[y * 240U + x];
+    }
+
+    GbaBus bus;
+    Ppu ppu;
+    Framebuffer framebuffer{};
+};
 
 void run_cycles(Emulator& emulator, const std::uint64_t cycles) {
     const auto target = emulator.cycle_counter() + cycles;
@@ -75,7 +96,8 @@ TEST_CASE("A frame lasts exactly 280896 master cycles", "[ppu][timing]") {
     emulator.run_frame();
     REQUIRE(emulator.frame_counter() == 1U);
     REQUIRE(emulator.cycle_counter() >= Ppu::kCyclesPerFrame);
-    REQUIRE(emulator.cycle_counter() < Ppu::kCyclesPerFrame + 16U);
+    // A frame ends at the first instruction boundary at or after the 280,896-cycle mark.
+    REQUIRE(emulator.cycle_counter() < Ppu::kCyclesPerFrame + 32U);
     REQUIRE(emulator.ppu().vcount() == 0U);
 
     emulator.run_frame();
@@ -84,64 +106,58 @@ TEST_CASE("A frame lasts exactly 280896 master cycles", "[ppu][timing]") {
 }
 
 TEST_CASE("Forced blank renders white scanlines", "[ppu][render]") {
-    GbaBus bus;
-    Framebuffer framebuffer{};
-    static_cast<void>(bus.write16(0x04000000U, 0x0080U));
-    Ppu::render_scanline(bus, 10, framebuffer);
-    REQUIRE(framebuffer[10U * 240U] == kWhite);
-    REQUIRE(framebuffer[10U * 240U + 239U] == kWhite);
+    VideoFixture video;
+    static_cast<void>(video.bus.write16(0x04000000U, 0x0080U));
+    video.render();
+    REQUIRE(video.pixel(0, 10) == kWhite);
+    REQUIRE(video.pixel(239, 10) == kWhite);
 }
 
 TEST_CASE("Mode 3 renders direct 15-bit color from VRAM", "[ppu][render]") {
-    GbaBus bus;
-    Framebuffer framebuffer{};
-    static_cast<void>(bus.write16(0x04000000U, 0x0403U));
-    static_cast<void>(bus.write16(0x06000000U + (5U * 240U + 7U) * 2U, 0x001FU));
-    Ppu::render_scanline(bus, 5, framebuffer);
-    REQUIRE(framebuffer[5U * 240U + 7U] == Rgba8{255, 0, 0, 255});
-    REQUIRE(framebuffer[5U * 240U + 8U] == Rgba8{0, 0, 0, 255});
+    VideoFixture video;
+    static_cast<void>(video.bus.write16(0x04000000U, 0x0403U));
+    static_cast<void>(video.bus.write16(0x06000000U + (5U * 240U + 7U) * 2U, 0x001FU));
+    video.render();
+    REQUIRE(video.pixel(7, 5) == Rgba8{255, 0, 0, 255});
+    REQUIRE(video.pixel(8, 5) == Rgba8{0, 0, 0, 255});
 }
 
 TEST_CASE("Mode 4 renders paletted pixels from the selected page", "[ppu][render]") {
-    GbaBus bus;
-    Framebuffer framebuffer{};
+    VideoFixture video;
+    auto& bus = video.bus;
     static_cast<void>(bus.write16(0x05000000U, 0x7C00U)); // backdrop: blue
     static_cast<void>(bus.write16(0x05000006U, 0x03E0U)); // palette 3: green
     static_cast<void>(bus.write16(0x06000000U, 0x0300U)); // page 0: pixel 1 = index 3
     static_cast<void>(bus.write16(0x0600A000U, 0x0003U)); // page 1: pixel 0 = index 3
 
     static_cast<void>(bus.write16(0x04000000U, 0x0404U));
-    Ppu::render_scanline(bus, 0, framebuffer);
-    REQUIRE(framebuffer[0] == Rgba8{0, 0, 255, 255}); // index 0 shows the backdrop
-    REQUIRE(framebuffer[1] == Rgba8{0, 255, 0, 255});
+    video.render();
+    REQUIRE(video.pixel(0, 0) == Rgba8{0, 0, 255, 255}); // index 0 shows the backdrop
+    REQUIRE(video.pixel(1, 0) == Rgba8{0, 255, 0, 255});
 
     static_cast<void>(bus.write16(0x04000000U, 0x0414U)); // frame select
-    Ppu::render_scanline(bus, 0, framebuffer);
-    REQUIRE(framebuffer[0] == Rgba8{0, 255, 0, 255});
-    REQUIRE(framebuffer[1] == Rgba8{0, 0, 255, 255});
+    video.render();
+    REQUIRE(video.pixel(0, 0) == Rgba8{0, 255, 0, 255});
+    REQUIRE(video.pixel(1, 0) == Rgba8{0, 0, 255, 255});
 }
 
 TEST_CASE("Mode 5 renders a 160x128 bitmap surrounded by the backdrop", "[ppu][render]") {
-    GbaBus bus;
-    Framebuffer framebuffer{};
+    VideoFixture video;
+    auto& bus = video.bus;
     static_cast<void>(bus.write16(0x05000000U, 0x001FU));
     static_cast<void>(bus.write16(0x06000000U + (2U * 160U + 159U) * 2U, 0x7FFFU));
     static_cast<void>(bus.write16(0x04000000U, 0x0405U));
-
-    Ppu::render_scanline(bus, 2, framebuffer);
-    REQUIRE(framebuffer[2U * 240U + 159U] == kWhite);
-    REQUIRE(framebuffer[2U * 240U + 160U] == Rgba8{255, 0, 0, 255});
-
-    Ppu::render_scanline(bus, 130, framebuffer);
-    REQUIRE(framebuffer[130U * 240U] == Rgba8{255, 0, 0, 255});
+    video.render();
+    REQUIRE(video.pixel(159, 2) == kWhite);
+    REQUIRE(video.pixel(160, 2) == Rgba8{255, 0, 0, 255});
+    REQUIRE(video.pixel(0, 130) == Rgba8{255, 0, 0, 255});
 }
 
 TEST_CASE("Disabling BG2 in a bitmap mode shows the backdrop color", "[ppu][render]") {
-    GbaBus bus;
-    Framebuffer framebuffer{};
-    static_cast<void>(bus.write16(0x05000000U, 0x03E0U));
-    static_cast<void>(bus.write16(0x06000000U, 0x7FFFU));
-    static_cast<void>(bus.write16(0x04000000U, 0x0003U));
-    Ppu::render_scanline(bus, 0, framebuffer);
-    REQUIRE(framebuffer[0] == Rgba8{0, 255, 0, 255});
+    VideoFixture video;
+    static_cast<void>(video.bus.write16(0x05000000U, 0x03E0U));
+    static_cast<void>(video.bus.write16(0x06000000U, 0x7FFFU));
+    static_cast<void>(video.bus.write16(0x04000000U, 0x0003U));
+    video.render();
+    REQUIRE(video.pixel(0, 0) == Rgba8{0, 255, 0, 255});
 }

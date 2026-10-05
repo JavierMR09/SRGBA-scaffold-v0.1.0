@@ -159,7 +159,10 @@ class Arm7Tdmi {
     [[nodiscard]] ExecutionResult execute_arm(std::uint32_t instruction, GbaBus& bus) noexcept;
     [[nodiscard]] ExecutionResult execute_thumb(std::uint16_t instruction) noexcept;
     [[nodiscard]] ExecutionResult execute_thumb(std::uint16_t instruction, GbaBus& bus) noexcept;
+    // Executes one instruction through the prefetch pipeline. Cycles include the opcode fetch
+    // for the instruction two slots ahead and any pipeline refill after a branch.
     [[nodiscard]] ExecutionResult step(GbaBus& bus) noexcept;
+    void flush_pipeline() noexcept;
 
     void take_exception(ExceptionType exception) noexcept;
     // Restores CPSR from the current mode's SPSR and resumes at `address`, matching
@@ -187,6 +190,8 @@ class Arm7Tdmi {
                                                                 GbaBus& bus) noexcept;
     [[nodiscard]] ExecutionResult execute_arm_block_transfer(std::uint32_t instruction,
                                                              GbaBus& bus) noexcept;
+    [[nodiscard]] ExecutionResult execute_arm_empty_block_transfer(std::uint32_t instruction,
+                                                                   GbaBus& bus) noexcept;
     [[nodiscard]] ExecutionResult execute_arm_multiply(std::uint32_t instruction) noexcept;
     [[nodiscard]] ExecutionResult execute_arm_long_multiply(std::uint32_t instruction) noexcept;
     [[nodiscard]] ExecutionResult execute_arm_swap(std::uint32_t instruction, GbaBus& bus) noexcept;
@@ -216,6 +221,11 @@ class Arm7Tdmi {
     std::array<std::uint32_t, 2> undefined_sp_lr_{};
     std::uint32_t program_counter_{};
     bool next_fetch_sequential_{};
+    // Two-stage prefetch: opcodes already fetched for the instructions at pipeline_address_ and
+    // the one after it. Stores to those addresses do not affect execution, as on hardware.
+    std::array<std::uint32_t, 2> pipeline_{};
+    std::uint32_t pipeline_address_{};
+    bool pipeline_valid_{};
 
     ProgramStatusRegister cpsr_{};
     ProgramStatusRegister spsr_fiq_{};

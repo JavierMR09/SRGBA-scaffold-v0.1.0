@@ -5,6 +5,7 @@
 #include "srgba/core/system_bios.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -239,16 +240,43 @@ void bit_unpack(Memory& memory, std::uint32_t source, std::uint32_t destination,
     }
 }
 
-[[nodiscard]] std::int32_t arctan(const std::int32_t tangent) noexcept {
-    const auto a = -((tangent * tangent) >> 14);
-    auto b = ((0xA9 * a) >> 14) + 0x390;
-    b = ((b * a) >> 14) + 0x91C;
-    b = ((b * a) >> 14) + 0xFB6;
-    b = ((b * a) >> 14) + 0x16AA;
-    b = ((b * a) >> 14) + 0x2081;
-    b = ((b * a) >> 14) + 0x3651;
-    b = ((b * a) >> 14) + 0xA2F9;
-    return (tangent * b) >> 16;
+// The BIOS works on full 32-bit registers with wrapping multiplies; these helpers reproduce that.
+[[nodiscard]] std::int32_t wrapping_multiply(const std::int32_t left,
+                                             const std::int32_t right) noexcept {
+    return static_cast<std::int32_t>(static_cast<std::uint32_t>(left) *
+                                     static_cast<std::uint32_t>(right));
+}
+
+[[nodiscard]] std::int32_t wrapping_shift_left(const std::int32_t value,
+                                               const unsigned amount) noexcept {
+    return static_cast<std::int32_t>(static_cast<std::uint32_t>(value) << amount);
+}
+
+[[nodiscard]] std::int32_t divide(const std::int32_t numerator,
+                                  const std::int32_t denominator) noexcept {
+    if (denominator == 0) {
+        return numerator < 0 ? -1 : 1;
+    }
+    if (numerator == std::numeric_limits<std::int32_t>::min() && denominator == -1) {
+        return numerator;
+    }
+    return numerator / denominator;
+}
+
+struct ArcTanResult {
+    std::int32_t angle;
+    std::int32_t r1;
+    std::int32_t r3;
+};
+
+// Polynomial approximation of atan(tangent) with a 1.14 fixed-point input.
+[[nodiscard]] ArcTanResult arctan(const std::int32_t tangent) noexcept {
+    const auto a = -(wrapping_multiply(tangent, tangent) >> 14);
+    auto b = (wrapping_multiply(0xA9, a) >> 14) + 0x390;
+    for (const std::int32_t term : {0x91C, 0xFB6, 0x16AA, 0x2081, 0x3651, 0xA2F9}) {
+        b = (wrapping_multiply(b, a) >> 14) + term;
+    }
+    return {wrapping_multiply(tangent, b) >> 16, a, b};
 }
 
 [[nodiscard]] std::uint32_t arctan2(const std::int32_t x, const std::int32_t y) noexcept {
@@ -258,68 +286,81 @@ void bit_unpack(Memory& memory, std::uint32_t source, std::uint32_t destination,
     if (x == 0) {
         return y >= 0 ? 0x4000U : 0xC000U;
     }
-    const auto ratio = [](const std::int32_t numerator, const std::int32_t denominator) {
-        return static_cast<std::int32_t>((static_cast<std::int64_t>(numerator) << 14) /
-                                         denominator);
-    };
+    const auto y_over_x = [&]() { return arctan(divide(wrapping_shift_left(y, 14), x)).angle; };
+    const auto x_over_y = [&]() { return arctan(divide(wrapping_shift_left(x, 14), y)).angle; };
     std::int32_t result = 0;
     if (y >= 0) {
         if (x >= 0) {
-            result = x >= y ? arctan(ratio(y, x)) : 0x4000 - arctan(ratio(x, y));
+            result = x >= y ? y_over_x() : 0x4000 - x_over_y();
         } else {
-            result = -x >= y ? arctan(ratio(y, x)) + 0x8000 : 0x4000 - arctan(ratio(x, y));
+            result = -x >= y ? y_over_x() + 0x8000 : 0x4000 - x_over_y();
         }
     } else {
         if (x <= 0) {
-            result = -x > -y ? arctan(ratio(y, x)) + 0x8000 : 0xC000 - arctan(ratio(x, y));
+            result = -x > -y ? y_over_x() + 0x8000 : 0xC000 - x_over_y();
         } else {
-            result = x >= -y ? arctan(ratio(y, x)) + 0x10000 : 0xC000 - arctan(ratio(x, y));
+            result = x >= -y ? y_over_x() + 0x10000 : 0xC000 - x_over_y();
         }
     }
     return static_cast<std::uint32_t>(result) & 0xFFFFU;
 }
 
-[[nodiscard]] double angle_radians(const std::uint16_t angle) noexcept {
-    return static_cast<double>(angle >> 8U) / 128.0 * std::numbers::pi;
+// Sine of (index * 2pi / 256) in 1.14 fixed point.
+[[nodiscard]] const std::array<std::int32_t, 256>& sine_table() noexcept {
+    static const auto table = [] {
+        std::array<std::int32_t, 256> values{};
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            values[index] = static_cast<std::int32_t>(std::lround(
+                std::sin(static_cast<double>(index) * 2.0 * std::numbers::pi / 256.0) * 16384.0));
+        }
+        return values;
+    }();
+    return table;
+}
+
+struct AffineMatrix {
+    std::int32_t pa;
+    std::int32_t pb;
+    std::int32_t pc;
+    std::int32_t pd;
+};
+
+// Rotation (upper byte of `angle`) and 8.8 scale factors, truncated to 8.8 like the BIOS.
+[[nodiscard]] AffineMatrix affine_matrix(const std::int32_t scale_x, const std::int32_t scale_y,
+                                         const std::uint16_t angle) noexcept {
+    const auto& sine = sine_table();
+    const auto step = static_cast<std::size_t>(angle >> 8U);
+    const auto sin_value = sine[step];
+    const auto cos_value = sine[(step + 64U) & 0xFFU];
+    return {
+        (cos_value * scale_x) >> 14,
+        -((sin_value * scale_x) >> 14),
+        (sin_value * scale_y) >> 14,
+        (cos_value * scale_y) >> 14,
+    };
 }
 
 void bg_affine_set(Memory& memory, std::uint32_t source, std::uint32_t destination,
                    const std::uint32_t count) noexcept {
     for (std::uint32_t index = 0; index < count; ++index) {
-        const auto origin_x =
-            static_cast<double>(static_cast<std::int32_t>(memory.read32(source))) / 256.0;
-        const auto origin_y =
-            static_cast<double>(static_cast<std::int32_t>(memory.read32(source + 4U))) / 256.0;
-        const auto center_x =
-            static_cast<double>(static_cast<std::int16_t>(memory.read16(source + 8U)));
-        const auto center_y =
-            static_cast<double>(static_cast<std::int16_t>(memory.read16(source + 10U)));
-        const auto scale_x =
-            static_cast<double>(static_cast<std::int16_t>(memory.read16(source + 12U))) / 256.0;
-        const auto scale_y =
-            static_cast<double>(static_cast<std::int16_t>(memory.read16(source + 14U))) / 256.0;
-        const auto theta = angle_radians(memory.read16(source + 16U));
+        const auto origin_x = static_cast<std::int32_t>(memory.read32(source));
+        const auto origin_y = static_cast<std::int32_t>(memory.read32(source + 4U));
+        const std::int32_t center_x = static_cast<std::int16_t>(memory.read16(source + 8U));
+        const std::int32_t center_y = static_cast<std::int16_t>(memory.read16(source + 10U));
+        const std::int32_t scale_x = static_cast<std::int16_t>(memory.read16(source + 12U));
+        const std::int32_t scale_y = static_cast<std::int16_t>(memory.read16(source + 14U));
+        const auto matrix = affine_matrix(scale_x, scale_y, memory.read16(source + 16U));
         source += 20U;
 
-        const auto pa = std::cos(theta) * scale_x;
-        const auto pb = -std::sin(theta) * scale_x;
-        const auto pc = std::sin(theta) * scale_y;
-        const auto pd = std::cos(theta) * scale_y;
-        const auto reference_x = origin_x - (pa * center_x + pb * center_y);
-        const auto reference_y = origin_y - (pc * center_x + pd * center_y);
-
-        const auto fixed16 = [](const double value) {
-            return static_cast<std::uint16_t>(static_cast<std::int32_t>(value * 256.0));
-        };
-        const auto fixed32 = [](const double value) {
-            return static_cast<std::uint32_t>(static_cast<std::int32_t>(value * 256.0));
-        };
-        memory.write16(destination, fixed16(pa));
-        memory.write16(destination + 2U, fixed16(pb));
-        memory.write16(destination + 4U, fixed16(pc));
-        memory.write16(destination + 6U, fixed16(pd));
-        memory.write32(destination + 8U, fixed32(reference_x));
-        memory.write32(destination + 12U, fixed32(reference_y));
+        // Reference point: origin minus the transformed display center, in 8.8 fixed point.
+        const auto reference_x = origin_x - (matrix.pa * center_x + matrix.pb * center_y);
+        const auto reference_y = origin_y - (matrix.pc * center_x + matrix.pd * center_y);
+        memory.write16(destination, static_cast<std::uint16_t>(matrix.pa));
+        memory.write16(destination + 2U, static_cast<std::uint16_t>(matrix.pb));
+        memory.write16(destination + 4U, static_cast<std::uint16_t>(matrix.pc));
+        memory.write16(destination + 6U, static_cast<std::uint16_t>(matrix.pd));
+        memory.write32(destination + 8U, static_cast<std::uint32_t>(reference_x));
+        memory.write32(destination + 12U, static_cast<std::uint32_t>(reference_y));
         destination += 16U;
     }
 }
@@ -327,20 +368,14 @@ void bg_affine_set(Memory& memory, std::uint32_t source, std::uint32_t destinati
 void obj_affine_set(Memory& memory, std::uint32_t source, std::uint32_t destination,
                     const std::uint32_t count, const std::uint32_t stride) noexcept {
     for (std::uint32_t index = 0; index < count; ++index) {
-        const auto scale_x =
-            static_cast<double>(static_cast<std::int16_t>(memory.read16(source))) / 256.0;
-        const auto scale_y =
-            static_cast<double>(static_cast<std::int16_t>(memory.read16(source + 2U))) / 256.0;
-        const auto theta = angle_radians(memory.read16(source + 4U));
+        const std::int32_t scale_x = static_cast<std::int16_t>(memory.read16(source));
+        const std::int32_t scale_y = static_cast<std::int16_t>(memory.read16(source + 2U));
+        const auto matrix = affine_matrix(scale_x, scale_y, memory.read16(source + 4U));
         source += 8U;
-
-        const auto fixed16 = [](const double value) {
-            return static_cast<std::uint16_t>(static_cast<std::int32_t>(value * 256.0));
-        };
-        memory.write16(destination, fixed16(std::cos(theta) * scale_x));
-        memory.write16(destination + stride, fixed16(-std::sin(theta) * scale_x));
-        memory.write16(destination + stride * 2U, fixed16(std::sin(theta) * scale_y));
-        memory.write16(destination + stride * 3U, fixed16(std::cos(theta) * scale_y));
+        memory.write16(destination, static_cast<std::uint16_t>(matrix.pa));
+        memory.write16(destination + stride, static_cast<std::uint16_t>(matrix.pb));
+        memory.write16(destination + stride * 2U, static_cast<std::uint16_t>(matrix.pc));
+        memory.write16(destination + stride * 3U, static_cast<std::uint16_t>(matrix.pd));
         destination += stride * 4U;
     }
 }
@@ -533,11 +568,15 @@ std::uint32_t HleBios::handle_swi(Arm7Tdmi& cpu, GbaBus& bus) noexcept {
         cycles += 40;
         break;
     }
-    case 0x09: // ArcTan
-        cpu.set_register(0, static_cast<std::uint32_t>(arctan(static_cast<std::int16_t>(r0))));
+    case 0x09: { // ArcTan
+        const auto result = arctan(static_cast<std::int32_t>(r0));
+        cpu.set_register(0, static_cast<std::uint32_t>(result.angle));
+        cpu.set_register(1, static_cast<std::uint32_t>(result.r1));
+        cpu.set_register(3, static_cast<std::uint32_t>(result.r3));
         break;
+    }
     case 0x0A: // ArcTan2
-        cpu.set_register(0, arctan2(static_cast<std::int16_t>(r0), static_cast<std::int16_t>(r1)));
+        cpu.set_register(0, arctan2(static_cast<std::int32_t>(r0), static_cast<std::int32_t>(r1)));
         break;
     case 0x0B: // CpuSet
         cycles += cpu_set(memory, r0, r1, r2);
