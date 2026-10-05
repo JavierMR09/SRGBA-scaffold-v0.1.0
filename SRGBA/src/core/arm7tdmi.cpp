@@ -40,6 +40,27 @@ namespace {
     return {value, false};
 }
 
+// LDRH/LDRSH semantics shared by ARM and Thumb. Misaligned LDRH rotates the aligned halfword by
+// eight bits across the full register; misaligned LDRSH loads the addressed byte sign-extended.
+[[nodiscard]] BusReadResult load_halfword(GbaBus& bus, const std::uint32_t address,
+                                          const BusAccess access, const bool signed_load) noexcept {
+    const bool misaligned = (address & 1U) != 0U;
+    if (signed_load && misaligned) {
+        auto read = bus.read8(address, access);
+        read.value = static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(static_cast<std::int8_t>(read.value)));
+        return read;
+    }
+    auto read = bus.read16(address & ~1U, access);
+    if (signed_load) {
+        read.value = static_cast<std::uint32_t>(
+            static_cast<std::int32_t>(static_cast<std::int16_t>(read.value)));
+    } else if (misaligned) {
+        read.value = std::rotr(read.value & 0xFFFFU, 8);
+    }
+    return read;
+}
+
 // ARM7TDMI multipliers terminate early once the remaining multiplier bits are all zero (or, for
 // signed operations, all ones). The result is the number of internal "m" cycles.
 [[nodiscard]] constexpr std::uint32_t multiply_cycles(const std::uint32_t multiplier,
@@ -276,6 +297,7 @@ void Arm7Tdmi::reset() noexcept {
     undefined_sp_lr_.fill(0);
     program_counter_ = 0;
     next_fetch_sequential_ = false;
+    pipeline_valid_ = false;
 
     cpsr_ = ProgramStatusRegister{};
     cpsr_.set_mode(ProcessorMode::Supervisor);
@@ -501,6 +523,7 @@ void Arm7Tdmi::branch_to(const std::uint32_t target) noexcept {
         program_counter_ = target & ~3U;
     }
     next_fetch_sequential_ = false;
+    pipeline_valid_ = false;
 }
 
 void Arm7Tdmi::advance_arm() noexcept {
@@ -541,12 +564,7 @@ ExecutionResult Arm7Tdmi::execute_arm_single_transfer(const std::uint32_t instru
     if (write_back && base_register == kProgramCounter) {
         return status(ExecutionStatus::UnsupportedInstruction);
     }
-    if (load && byte_transfer && data_register == kProgramCounter) {
-        return status(ExecutionStatus::UnsupportedInstruction);
-    }
-    if (load && write_back && data_register == base_register) {
-        return status(ExecutionStatus::UnsupportedInstruction);
-    }
+    // A load whose destination is also the written-back base keeps the loaded value.
 
     std::uint32_t offset = instruction & 0xFFFU;
     if (register_offset) {
@@ -604,9 +622,7 @@ ExecutionResult Arm7Tdmi::execute_arm_halfword_transfer(const std::uint32_t inst
     const auto data_register = static_cast<std::size_t>((instruction >> 12U) & 0xFU);
 
     if ((!load && signed_transfer) || (!signed_transfer && !halfword) ||
-        (load && data_register == kProgramCounter) ||
-        (write_back && base_register == kProgramCounter) ||
-        (load && write_back && data_register == base_register)) {
+        (write_back && base_register == kProgramCounter)) {
         return status(ExecutionStatus::UnsupportedInstruction);
     }
 
@@ -646,15 +662,17 @@ ExecutionResult Arm7Tdmi::execute_arm_halfword_transfer(const std::uint32_t inst
             static_cast<std::int32_t>(static_cast<std::int8_t>(read.value)));
         cycles = read.cycles;
     } else {
-        const auto read = bus.read16(address, access);
-        value = signed_transfer ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
-                                      static_cast<std::int16_t>(read.value)))
-                                : read.value;
+        const auto read = load_halfword(bus, address, access, signed_transfer);
+        value = read.value;
         cycles = read.cycles;
     }
 
     if (write_back) {
         set_register(base_register, adjusted);
+    }
+    if (data_register == kProgramCounter) {
+        branch_to(value);
+        return executed(true, cycles + 1U);
     }
     set_register(data_register, value);
     advance_arm();
@@ -672,8 +690,11 @@ ExecutionResult Arm7Tdmi::execute_arm_block_transfer(const std::uint32_t instruc
     const auto register_list = static_cast<std::uint16_t>(instruction);
     const auto register_count = static_cast<std::uint32_t>(std::popcount(register_list));
 
-    if (register_list == 0U || base_register == kProgramCounter) {
+    if (base_register == kProgramCounter) {
         return status(ExecutionStatus::UnsupportedInstruction);
+    }
+    if (register_list == 0U) {
+        return execute_arm_empty_block_transfer(instruction, bus);
     }
 
     const bool loads_program_counter = load && bit(register_list, kProgramCounter);
@@ -751,6 +772,36 @@ ExecutionResult Arm7Tdmi::execute_arm_block_transfer(const std::uint32_t instruc
     }
     advance_arm();
     return executed(false, cycles + static_cast<std::uint32_t>(load));
+}
+
+ExecutionResult Arm7Tdmi::execute_arm_empty_block_transfer(const std::uint32_t instruction,
+                                                           GbaBus& bus) noexcept {
+    // ARMv4 quirk: an empty register list transfers r15 only, but moves the base as if all
+    // sixteen registers had been transferred.
+    const bool pre_indexed = bit(instruction, 24);
+    const bool increment = bit(instruction, 23);
+    const bool write_back = bit(instruction, 21);
+    const bool load = bit(instruction, 20);
+    const auto base_register = static_cast<std::size_t>((instruction >> 16U) & 0xFU);
+    const auto base = register_value(base_register);
+    std::uint32_t address = 0;
+    if (increment) {
+        address = pre_indexed ? base + 4U : base;
+    } else {
+        address = pre_indexed ? base - 0x40U : base - 0x3CU;
+    }
+    const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
+    if (write_back) {
+        set_register(base_register, increment ? base + 0x40U : base - 0x40U);
+    }
+    if (load) {
+        const auto read = bus.read32(address & ~3U, access);
+        branch_to(read.value);
+        return executed(true, read.cycles + 1U);
+    }
+    const auto write = bus.write32(address & ~3U, program_counter_ + 12U, access);
+    advance_arm();
+    return executed(false, write.cycles);
 }
 
 ExecutionResult Arm7Tdmi::execute_arm_multiply(const std::uint32_t instruction) noexcept {
@@ -960,29 +1011,47 @@ ExecutionResult Arm7Tdmi::execute_thumb(const std::uint16_t instruction, GbaBus&
 }
 
 ExecutionResult Arm7Tdmi::step(GbaBus& bus) noexcept {
-    const BusAccess fetch_access{
-        next_fetch_sequential_ ? AccessSequence::Sequential : AccessSequence::NonSequential,
-        AccessKind::Instruction,
-        program_counter_,
+    const bool arm = cpsr_.instruction_set() == InstructionSet::Arm;
+    const std::uint32_t width = arm ? 4U : 2U;
+    const auto executing_address = program_counter_;
+    std::uint32_t fetch_cycles = 0;
+    const auto fetch = [&](const std::uint32_t address, const AccessSequence sequence,
+                           const bool refill = false) {
+        const BusAccess access{sequence, AccessKind::Instruction, executing_address, refill};
+        const auto read = arm ? bus.read32(address, access) : bus.read16(address, access);
+        fetch_cycles += read.cycles;
+        return read.value;
     };
 
-    ExecutionResult result;
-    std::uint32_t fetch_cycles = 0;
-    if (cpsr_.instruction_set() == InstructionSet::Arm) {
-        const auto fetch = bus.read32(program_counter_, fetch_access);
-        fetch_cycles = fetch.cycles;
-        result = execute_arm_impl(fetch.value, &bus);
-    } else {
-        const auto fetch = bus.read16(program_counter_, fetch_access);
-        fetch_cycles = fetch.cycles;
-        result = execute_thumb_impl(static_cast<std::uint16_t>(fetch.value), &bus);
+    if (!pipeline_valid_ || pipeline_address_ != executing_address) {
+        // Refill after a branch, exception, or state change: N + S cycles.
+        pipeline_[0] = fetch(executing_address, AccessSequence::NonSequential, true);
+        pipeline_[1] = fetch(executing_address + width, AccessSequence::Sequential, true);
+        next_fetch_sequential_ = true;
     }
 
+    const auto opcode = pipeline_[0];
+    pipeline_[0] = pipeline_[1];
+    pipeline_[1] =
+        fetch(executing_address + width * 2U,
+              next_fetch_sequential_ ? AccessSequence::Sequential : AccessSequence::NonSequential);
+    pipeline_address_ = executing_address + width;
+    pipeline_valid_ = true;
+
+    ExecutionResult result = arm ? execute_arm_impl(opcode, &bus)
+                                 : execute_thumb_impl(static_cast<std::uint16_t>(opcode), &bus);
     result.cycles += fetch_cycles;
     const bool completed = result.status == ExecutionStatus::Executed ||
                            result.status == ExecutionStatus::ConditionFailed;
+    if (!completed) {
+        pipeline_valid_ = false;
+    }
     next_fetch_sequential_ = completed && !result.pipeline_flushed;
     return result;
+}
+
+void Arm7Tdmi::flush_pipeline() noexcept {
+    pipeline_valid_ = false;
 }
 
 ExecutionResult Arm7Tdmi::execute_arm_impl(const std::uint32_t instruction,
@@ -1170,6 +1239,12 @@ ExecutionResult Arm7Tdmi::execute_arm_impl(const std::uint32_t instruction,
         } else {
             set_logical_flags(result, operand2.carry);
         }
+        // TSTP/TEQP/CMPP/CMNP (Rd = r15) copy SPSR to CPSR on the ARM7TDMI without flushing.
+        if (destination == kProgramCounter) {
+            if (const auto* saved = current_spsr(); saved != nullptr) {
+                static_cast<void>(cpsr_.assign(saved->value()));
+            }
+        }
         advance_arm();
         return executed();
     }
@@ -1351,10 +1426,8 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
                 static_cast<std::int32_t>(static_cast<std::int8_t>(read.value)));
             cycles = read.cycles;
         } else {
-            const auto read = bus->read16(address, access);
-            value = signed_transfer ? static_cast<std::uint32_t>(static_cast<std::int32_t>(
-                                          static_cast<std::int16_t>(read.value)))
-                                    : read.value;
+            const auto read = load_halfword(*bus, address, access, signed_transfer);
+            value = read.value;
             cycles = read.cycles;
         }
         set_register(data_register, value);
@@ -1403,7 +1476,7 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
         const auto address = register_value(base_register) + offset;
         const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, program_counter_};
         if (load) {
-            const auto read = bus->read16(address, access);
+            const auto read = load_halfword(*bus, address, access, false);
             set_register(data_register, read.value);
             advance_thumb();
             return executed(false, read.cycles + 1U);
@@ -1535,10 +1608,21 @@ ExecutionResult Arm7Tdmi::execute_thumb_impl(const std::uint16_t instruction,
         const auto base_register = static_cast<std::size_t>((instruction >> 8U) & 0x7U);
         const auto register_list = static_cast<std::uint8_t>(instruction);
         const auto register_count = static_cast<std::uint32_t>(std::popcount(register_list));
-        if (register_list == 0U) {
-            return status(ExecutionStatus::UnsupportedInstruction);
-        }
         const auto base_value = register_value(base_register);
+        if (register_list == 0U) {
+            // ARMv4 quirk: an empty list transfers r15 and advances the base by 0x40.
+            const BusAccess access{AccessSequence::NonSequential, AccessKind::Data,
+                                   program_counter_};
+            set_register(base_register, base_value + 0x40U);
+            if (load) {
+                const auto read = bus->read32(base_value & ~3U, access);
+                branch_to(read.value);
+                return executed(true, read.cycles + 1U);
+            }
+            const auto write = bus->write32(base_value & ~3U, program_counter_ + 6U, access);
+            advance_thumb();
+            return executed(false, write.cycles);
+        }
         const auto lowest_register = static_cast<std::size_t>(std::countr_zero(register_list));
 
         auto address = base_value;

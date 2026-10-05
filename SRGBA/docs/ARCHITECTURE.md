@@ -99,6 +99,32 @@ system ROM wait loop so interrupts are delivered exactly as they would be on har
 The demo ROM in `tools/homebrew` is assembled from C++ by a small ARM assembler. Tests run it end
 to end, and the build writes it to `samples/SRGBA-demo.gba` for release packages.
 
+## M4 DMA, timers, and complete PPU
+
+`Arm7Tdmi::step` now models the two-stage prefetch pipeline: the opcodes for the next two
+instructions are fetched before the current one executes, so stores into those addresses do not
+change execution, branches cost a refill (N + S), and the BIOS open-bus latch naturally holds the
+opcode two slots ahead. The built-in system ROM places the value hardware leaves after an
+interrupt return at the prefetched address. With WAITCNT prefetch enabled, sequential opcode
+fetches from the Game Pak cost one cycle per halfword; the refill after a branch and data accesses
+pay full wait states.
+
+`Timers` evaluates free-running counters lazily from the master clock and schedules one overflow
+event per running timer; count-up timers advance on the previous timer's overflow.
+`DmaController` latches addresses and counts when a channel is enabled, runs immediate transfers
+at once and VBlank/HBlank transfers from the PPU events, and reports the cycles spent so the
+emulator stalls the CPU. Transfers from the cartridge always increment their source address.
+
+The PPU renders each visible line into per-layer buffers (four backgrounds and one sprite line),
+computes a per-pixel window mask, then composes front to back: sprites sit in front of backgrounds
+with the same priority, lower background numbers win ties, and the top two layers feed alpha
+blending (always for semi-transparent sprites) or the brightness effects. Affine backgrounds use
+internal reference points that reload at the start of each frame and whenever BGxX/BGxY is
+written, and advance by (PB, PD) after every line.
+
+The bus serves aligned 16/32-bit accesses to RAM, video memory, and ROM through direct pointers,
+and the scheduler caches its next deadline so the per-instruction event check is a single compare.
+
 ## Planned core modules
 
 ```text

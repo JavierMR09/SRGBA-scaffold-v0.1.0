@@ -33,7 +33,17 @@ jobs:
       - name: Build
         run: cmake --build build/core --parallel
 
+      - name: Fetch public test ROMs
+        # jsmolka/gba-tests (MIT), pinned for reproducible results.
+        working-directory: ${{ runner.temp }}
+        run: |
+          git init gba-tests
+          git -C gba-tests fetch --depth 1 https://github.com/jsmolka/gba-tests.git a7113b67e63f83a9b321696ddd7042ccfad6c881
+          git -C gba-tests checkout FETCH_HEAD
+
       - name: Test
+        env:
+          SRGBA_GBA_TESTS_DIR: ${{ runner.temp }}/gba-tests
         run: ctest --test-dir build/core --output-on-failure
 
   windows-app:
@@ -54,7 +64,16 @@ jobs:
           -DSRGBA_WARNINGS_AS_ERRORS=ON
 
       - name: Build
-        run: cmake --build build/windows --config Release --parallel
+        shell: pwsh
+        run: |
+          cmake --build build/windows --config Release --parallel 2>&1 | Tee-Object -FilePath build.log
+          if ($LASTEXITCODE -ne 0) {
+            # Surface compiler diagnostics as annotations so they are visible without the raw log.
+            Select-String -Path build.log -Pattern ': (fatal error|error|warning) [A-Z]+[0-9]+' |
+              Select-Object -First 40 |
+              ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
+            exit 1
+          }
 
       - name: Test
         run: ctest --test-dir build/windows -C Release --output-on-failure

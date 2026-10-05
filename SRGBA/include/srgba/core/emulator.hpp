@@ -36,6 +36,11 @@ struct CpuFault {
 class Emulator {
   public:
     Emulator();
+    Emulator(const Emulator&) = delete;
+    Emulator& operator=(const Emulator&) = delete;
+    Emulator(Emulator&&) = delete;
+    Emulator& operator=(Emulator&&) = delete;
+    ~Emulator() = default;
 
     [[nodiscard]] bool load_rom(const std::filesystem::path& path, std::string& error_message);
     [[nodiscard]] bool load_bios(const std::filesystem::path& path, std::string& error_message);

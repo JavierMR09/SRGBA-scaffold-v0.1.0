@@ -49,11 +49,11 @@ constexpr SDL_DialogFileFilter kBiosFilters[] = {
     }
     switch (control & 0x7U) {
     case 0:
-        return "Mode 0 (tiles: arrives in M4)";
+        return "Mode 0 (4 tile layers)";
     case 1:
-        return "Mode 1 (tiles: arrives in M4)";
+        return "Mode 1 (2 tile + 1 affine)";
     case 2:
-        return "Mode 2 (tiles: arrives in M4)";
+        return "Mode 2 (2 affine layers)";
     case 3:
         return "Mode 3 (bitmap)";
     case 4:
@@ -294,6 +294,15 @@ void Application::update() {
         emulator_.run_frame();
         frame_time_accumulator_ns_ -= kNanosecondsPerFrame;
         produced_frame = true;
+        ++frames_this_window_;
+    }
+
+    // Emulated frames per second, refreshed twice a second.
+    if (now - fps_window_start_ns_ >= 500000000ULL) {
+        const auto window = static_cast<double>(now - fps_window_start_ns_) / 1e9;
+        measured_fps_ = playing ? static_cast<double>(frames_this_window_) / window : 0.0;
+        frames_this_window_ = 0;
+        fps_window_start_ns_ = now;
     }
 
     if (const auto& fault = emulator_.fault(); fault && !fault_reported_) {
@@ -434,12 +443,13 @@ void Application::draw_landing_page() {
     ImGui::SetWindowFontScale(2.2F);
     ImGui::TextUnformatted("SRGBA");
     ImGui::SetWindowFontScale(1.0F);
-    ImGui::TextDisabled("Game Boy Advance emulator %s - M3 timing and bitmap video", kVersion);
+    ImGui::TextDisabled("Game Boy Advance emulator %s - M4 graphics, DMA, and timers", kVersion);
     ImGui::Spacing();
     ImGui::TextWrapped(
-        "Open a legally obtained .gba ROM, or try the SRGBA demo in the samples folder. This "
-        "build runs games with interrupts, input, and bitmap video modes 3-5; tile graphics "
-        "(used by most commercial games), sound, and saves arrive in later milestones.");
+        "Open a legally obtained .gba ROM, or try the demos in the samples folder. This build "
+        "emulates the CPU, every video mode with sprites and effects, DMA, timers, interrupts, "
+        "and input. Sound and battery saves arrive in the next milestone, so games run silently "
+        "and cannot save yet.");
     ImGui::Spacing();
 
     if (ImGui::Button("Open GBA ROM", ImVec2(190.0F, 42.0F))) {
@@ -496,7 +506,8 @@ void Application::draw_game_view() {
 
     ImGui::Separator();
     const auto display_control = emulator_.bus().io_register16(0x000U);
-    ImGui::TextDisabled("%s  |  frame %llu  |  PC %08X%s", describe_display_mode(display_control),
+    ImGui::TextDisabled("%s  |  %.1f fps  |  frame %llu  |  PC %08X%s",
+                        describe_display_mode(display_control), measured_fps_,
                         static_cast<unsigned long long>(emulator_.frame_counter()),
                         static_cast<unsigned>(emulator_.cpu().program_counter()),
                         emulator_.is_halted() ? " (halted)" : "");
@@ -614,7 +625,7 @@ void Application::draw_about_window() {
     ImGui::TextWrapped(
         "A clean-room Game Boy Advance emulator project built with C++20, SDL3, and Dear ImGui.");
     ImGui::Spacing();
-    ImGui::TextDisabled("Current status: M3 scheduling, interrupts, input, and bitmap video");
+    ImGui::TextDisabled("Current status: M4 graphics, DMA, and timers");
     ImGui::TextDisabled("License: MIT");
     ImGui::Spacing();
     ImGui::TextWrapped("SRGBA does not include commercial ROMs or Nintendo BIOS files.");

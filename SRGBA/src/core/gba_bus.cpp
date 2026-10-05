@@ -19,6 +19,10 @@ constexpr std::size_t kInterruptEnableOffset = 0x200U;
 constexpr std::size_t kInterruptFlagsOffset = 0x202U;
 constexpr std::size_t kInterruptMasterOffset = 0x208U;
 constexpr std::size_t kHaltControlOffset = 0x301U;
+constexpr std::size_t kDmaStart = 0x0B0U;
+constexpr std::size_t kDmaEnd = 0x0E0U;
+constexpr std::size_t kTimerStart = 0x100U;
+constexpr std::size_t kTimerEnd = 0x110U;
 // After the BIOS boot sequence, the last fetched BIOS opcode is "MSR CPSR_fc, r0" (0xE129F000).
 constexpr std::uint32_t kPostBootBiosLatch = 0xE129F000U;
 constexpr std::uint32_t kPostBootFlagAddress = 0x04000300U;
@@ -59,6 +63,9 @@ void GbaBus::reset() noexcept {
     open_bus_ = 0;
     key_input_ = kKeyMask;
     halt_requested_ = false;
+    affine_reload_.fill(true);
+    timers_.reset();
+    dma_.reset();
 }
 
 void GbaBus::initialize_post_bios() noexcept {
@@ -177,8 +184,63 @@ BusReadResult GbaBus::read8(const std::uint32_t address, const BusAccess access)
     return {value, access_cycles(address, 1U, access.sequence)};
 }
 
+const std::uint8_t* GbaBus::fast_read_pointer(const std::uint32_t aligned_address,
+                                              const std::size_t access_width) const noexcept {
+    switch (aligned_address >> 24U) {
+    case 0x02U:
+        return &ewram_[aligned_address & (kEwramSize - 1U)];
+    case 0x03U:
+        return &iwram_[aligned_address & (kIwramSize - 1U)];
+    case 0x05U:
+        return &palette_[aligned_address & (kPaletteSize - 1U)];
+    case 0x06U:
+        return &vram_[vram_offset(aligned_address)];
+    case 0x07U:
+        return &oam_[aligned_address & (kOamSize - 1U)];
+    case 0x08U:
+    case 0x09U:
+    case 0x0AU:
+    case 0x0BU:
+    case 0x0CU:
+    case 0x0DU: {
+        const auto offset = static_cast<std::size_t>(aligned_address & kGamePakWindowMask);
+        if (offset + access_width <= game_pak_.size()) {
+            return &game_pak_[offset];
+        }
+        return nullptr;
+    }
+    default:
+        return nullptr;
+    }
+}
+
+std::uint8_t* GbaBus::fast_write_pointer(const std::uint32_t aligned_address) noexcept {
+    switch (aligned_address >> 24U) {
+    case 0x02U:
+        return &ewram_[aligned_address & (kEwramSize - 1U)];
+    case 0x03U:
+        return &iwram_[aligned_address & (kIwramSize - 1U)];
+    case 0x05U:
+        return &palette_[aligned_address & (kPaletteSize - 1U)];
+    case 0x06U:
+        return &vram_[vram_offset(aligned_address)];
+    case 0x07U:
+        return &oam_[aligned_address & (kOamSize - 1U)];
+    default:
+        return nullptr;
+    }
+}
+
 BusReadResult GbaBus::read16(const std::uint32_t address, const BusAccess access) noexcept {
     const auto aligned_address = address & ~1U;
+    if (const auto* memory = fast_read_pointer(aligned_address, 2U)) {
+        auto halfword = static_cast<std::uint16_t>(memory[0] | (memory[1] << 8U));
+        if ((address & 1U) != 0U) {
+            halfword = static_cast<std::uint16_t>((halfword >> 8U) | (halfword << 8U));
+        }
+        latch_bus_value(halfword, 2U);
+        return {halfword, fetch_cycles(address, 2U, access)};
+    }
     bool low_mapped = false;
     bool high_mapped = false;
     const auto low = read_byte(aligned_address, access, low_mapped);
@@ -197,11 +259,20 @@ BusReadResult GbaBus::read16(const std::uint32_t address, const BusAccess access
             bios_latch_ = replicate_halfword(halfword);
         }
     }
-    return {value, access_cycles(address, 2U, access.sequence)};
+    return {value, fetch_cycles(address, 2U, access)};
 }
 
 BusReadResult GbaBus::read32(const std::uint32_t address, const BusAccess access) noexcept {
     const auto aligned_address = address & ~3U;
+    if (const auto* memory = fast_read_pointer(aligned_address, 4U)) {
+        const auto word = static_cast<std::uint32_t>(memory[0]) |
+                          (static_cast<std::uint32_t>(memory[1]) << 8U) |
+                          (static_cast<std::uint32_t>(memory[2]) << 16U) |
+                          (static_cast<std::uint32_t>(memory[3]) << 24U);
+        const auto value = std::rotr(word, static_cast<int>((address & 3U) * 8U));
+        latch_bus_value(value, 4U);
+        return {value, fetch_cycles(address, 4U, access)};
+    }
     std::uint32_t value = 0;
     bool all_mapped = true;
     for (std::size_t index = 0; index < 4U; ++index) {
@@ -222,7 +293,7 @@ BusReadResult GbaBus::read32(const std::uint32_t address, const BusAccess access
     } else {
         value = open_bus_value(address, 4U);
     }
-    return {value, access_cycles(address, 4U, access.sequence)};
+    return {value, fetch_cycles(address, 4U, access)};
 }
 
 BusWriteResult GbaBus::write8(const std::uint32_t address, const std::uint8_t value,
@@ -235,6 +306,12 @@ BusWriteResult GbaBus::write8(const std::uint32_t address, const std::uint8_t va
 BusWriteResult GbaBus::write16(const std::uint32_t address, const std::uint16_t value,
                                const BusAccess access) noexcept {
     const auto aligned_address = address & ~1U;
+    if (auto* memory = fast_write_pointer(aligned_address)) {
+        memory[0] = static_cast<std::uint8_t>(value);
+        memory[1] = static_cast<std::uint8_t>(value >> 8U);
+        latch_bus_value(value, 2U);
+        return {access_cycles(address, 2U, access.sequence)};
+    }
     write_byte(aligned_address, static_cast<std::uint8_t>(value), 2U);
     write_byte(aligned_address + 1U, static_cast<std::uint8_t>(value >> 8U), 2U);
     latch_bus_value(value, 2U);
@@ -244,6 +321,13 @@ BusWriteResult GbaBus::write16(const std::uint32_t address, const std::uint16_t 
 BusWriteResult GbaBus::write32(const std::uint32_t address, const std::uint32_t value,
                                const BusAccess access) noexcept {
     const auto aligned_address = address & ~3U;
+    if (auto* memory = fast_write_pointer(aligned_address)) {
+        for (std::size_t index = 0; index < 4U; ++index) {
+            memory[index] = byte_at(value, index);
+        }
+        latch_bus_value(value, 4U);
+        return {access_cycles(address, 4U, access.sequence)};
+    }
     for (std::size_t index = 0; index < 4U; ++index) {
         write_byte(aligned_address + static_cast<std::uint32_t>(index), byte_at(value, index), 4U);
     }
@@ -261,6 +345,45 @@ bool GbaBus::game_pak_prefetch_enabled() const noexcept {
 
 std::uint8_t GbaBus::post_boot_flag() const noexcept {
     return io_[kPostBootFlagAddress - kIoStart];
+}
+
+void GbaBus::attach_scheduler(Scheduler& scheduler) noexcept {
+    scheduler_ = &scheduler;
+}
+
+Scheduler& GbaBus::scheduler() noexcept {
+    return *scheduler_;
+}
+
+Timers& GbaBus::timers() noexcept {
+    return timers_;
+}
+
+const Timers& GbaBus::timers() const noexcept {
+    return timers_;
+}
+
+DmaController& GbaBus::dma() noexcept {
+    return dma_;
+}
+
+std::uint8_t GbaBus::on_timer_overflow(const std::size_t index,
+                                       const std::uint64_t timestamp) noexcept {
+    return timers_.on_overflow(index, timestamp, *scheduler_, *this);
+}
+
+void GbaBus::trigger_dma(const DmaTiming timing) noexcept {
+    dma_.trigger(timing, *this);
+}
+
+std::uint32_t GbaBus::take_dma_cycles() noexcept {
+    return dma_.take_stall_cycles();
+}
+
+bool GbaBus::take_affine_reload(const std::size_t background) noexcept {
+    const bool reload = affine_reload_[background];
+    affine_reload_[background] = false;
+    return reload;
 }
 
 bool GbaBus::using_builtin_bios() const noexcept {
@@ -447,6 +570,13 @@ std::uint8_t GbaBus::read_byte(const std::uint32_t address, const BusAccess& acc
         if (offset == 0x205U) {
             return static_cast<std::uint8_t>(wait_control_ >> 8U);
         }
+        if (offset >= kTimerStart && offset < kTimerEnd) {
+            return timers_.read(static_cast<std::uint32_t>(offset - kTimerStart),
+                                scheduler_->now());
+        }
+        if (offset >= kDmaStart && offset < kDmaEnd) {
+            return dma_.read(static_cast<std::uint32_t>(offset - kDmaStart));
+        }
         if (offset == kKeyInputOffset) {
             return static_cast<std::uint8_t>(key_input_);
         }
@@ -527,6 +657,20 @@ void GbaBus::write_byte(const std::uint32_t address, const std::uint8_t value,
             wait_control_ &= kWaitControlWritableMask;
             return;
         }
+        if (offset >= kTimerStart && offset < kTimerEnd) {
+            timers_.write(static_cast<std::uint32_t>(offset - kTimerStart), value, *scheduler_);
+            return;
+        }
+        if (offset >= kDmaStart && offset < kDmaEnd) {
+            dma_.write(static_cast<std::uint32_t>(offset - kDmaStart), value, *this);
+            return;
+        }
+        if (offset >= 0x028U && offset < 0x030U) {
+            affine_reload_[0] = true;
+        } else if (offset >= 0x038U && offset < 0x040U) {
+            affine_reload_[1] = true;
+        }
+
         switch (offset) {
         case kDisplayStatusOffset:
             // VBlank, HBlank, and VCount-match flags are owned by the PPU.
@@ -666,6 +810,21 @@ std::uint32_t GbaBus::access_cycles(const std::uint32_t address, const std::size
         return 1U;
     }
     return 1U;
+}
+
+std::uint32_t GbaBus::fetch_cycles(const std::uint32_t address, const std::size_t access_width,
+                                   const BusAccess& access) const noexcept {
+    // Approximate Game Pak prefetch: while the CPU executes sequentially from ROM, the buffer
+    // runs ahead and serves each opcode halfword in a single cycle. Data accesses and the
+    // refill after a branch still pay the full WAITCNT cost.
+    const auto region = region_for(address);
+    const bool game_pak =
+        region == Region::GamePak0 || region == Region::GamePak1 || region == Region::GamePak2;
+    if (game_pak && game_pak_prefetch_enabled() && access.kind == AccessKind::Instruction &&
+        access.sequence == AccessSequence::Sequential && !access.pipeline_refill) {
+        return access_width == 4U ? 2U : 1U;
+    }
+    return access_cycles(address, access_width, access.sequence);
 }
 
 std::uint32_t GbaBus::game_pak_cycles(const std::uint32_t address, const std::size_t access_width,

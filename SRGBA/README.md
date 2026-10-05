@@ -3,16 +3,21 @@
 SRGBA is a clean-room Game Boy Advance emulator project written in C++20. The initial target is
 Windows 10/11 x64, with a platform-independent emulation core and an SDL3 desktop frontend.
 
-> **Project status:** M3 scheduling, interrupts, input, and bitmap video. SRGBA runs homebrew that
-> draws with bitmap modes 3-5, waits on VBlank through the BIOS, and reads the keypad, with no BIOS
-> dump required. Tile graphics (used by most commercial games), sound, and saves arrive in M4-M5,
-> so commercial-game compatibility is not expected yet.
+> **Project status:** M4 graphics, DMA, and timers. SRGBA emulates the ARM7TDMI (passing the
+> public ARM, Thumb, memory, BIOS, and pipeline test suites), every video mode with sprites,
+> windows, blending, and mosaic, four DMA channels, and four timers, with no BIOS dump required.
+> Sound and battery saves arrive in M5, so games run silently and cannot save yet.
 
 ## Try it
 
-Download the latest `SRGBA-windows-x64` ZIP, extract it anywhere, and run `SRGBA.exe`. Open
-`samples/SRGBA-demo.gba` to try the bundled demo: move the square with the arrow keys (or a
-controller's D-pad) and hold **X** (GBA A) to change its color.
+Download the latest `SRGBA-windows-x64` ZIP, extract it anywhere, and run `SRGBA.exe`. The
+`samples` folder has two original demos:
+
+- `SRGBA-demo.gba`: move the square with the arrow keys (or a controller's D-pad) and hold **X**
+  (GBA A) to change its color.
+- `SRGBA-tiles-demo.gba`: a scrolling tile background, a ball sprite with a see-through shadow,
+  and a highlight band that sweeps across the screen. It exercises DMA, timers, tile graphics,
+  sprites, windows, and blending together.
 
 | GBA      | Keyboard                 | Controller                     |
 |----------|--------------------------|--------------------------------|
@@ -56,6 +61,16 @@ controller's D-pad) and hold **X** (GBA A) to change its color.
   run-length, BitUnPack, affine setup, and more)
 - Frame pacing at the GBA's native ~59.73 Hz, independent of monitor refresh rate
 - An original demo ROM, generated at build time and shipped in `samples/`
+- Two-stage ARM7TDMI prefetch pipeline (self-modifying code and BIOS open-bus values behave as on
+  hardware) and an approximate Game Pak prefetch buffer
+- Video modes 0-2: regular tile backgrounds (4bpp/8bpp, flips, scrolling, all map sizes) and
+  affine backgrounds with wrap-around, plus affine transformation of bitmap modes 3-5
+- 128 sprites: regular and affine, double-size, 1D/2D tile mapping, flips, priorities,
+  semi-transparency, and the object window
+- Windows 0/1, object window, alpha blending, brightness effects, and mosaic
+- Four DMA channels (immediate, VBlank, HBlank, repeat, address modes, IRQs) with CPU stall timing
+- Four hardware timers with prescalers, cascading, and interrupts
+- Public CPU test suites (jsmolka/gba-tests) run in CI
 - Isolated, testable `srgba_core` library
 - Automated core tests on Linux and full application builds on Windows
 - GitHub Actions release ZIP generation
