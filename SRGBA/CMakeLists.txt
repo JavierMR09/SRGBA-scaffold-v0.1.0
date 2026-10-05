@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SRGBA
-    VERSION 0.3.0
+    VERSION 0.4.0
     DESCRIPTION "A clean-room Game Boy Advance emulator"
     LANGUAGES CXX
 )
@@ -28,6 +28,9 @@ add_library(
     src/core/cartridge.cpp
     src/core/emulator.cpp
     src/core/gba_bus.cpp
+    src/core/hle_bios.cpp
+    src/core/ppu.cpp
+    src/core/system_bios.cpp
 )
 add_library(SRGBA::core ALIAS srgba_core)
 
@@ -40,6 +43,21 @@ target_include_directories(
 )
 srgba_set_project_warnings(srgba_core)
 
+# Original homebrew tooling: a tiny ARM assembler and the SRGBA demo ROM used by tests and
+# shipped in release packages.
+add_library(
+    srgba_homebrew STATIC
+    tools/homebrew/arm_assembler.cpp
+    tools/homebrew/demo_rom.cpp
+)
+target_include_directories(srgba_homebrew PUBLIC "${PROJECT_SOURCE_DIR}/tools/homebrew")
+target_link_libraries(srgba_homebrew PUBLIC SRGBA::core)
+srgba_set_project_warnings(srgba_homebrew)
+
+add_executable(srgba_make_demo_rom tools/homebrew/make_demo_rom.cpp)
+target_link_libraries(srgba_make_demo_rom PRIVATE srgba_homebrew)
+srgba_set_project_warnings(srgba_make_demo_rom)
+
 if(SRGBA_BUILD_APP)
     include(Dependencies)
     srgba_fetch_frontend_dependencies()
@@ -47,12 +65,14 @@ if(SRGBA_BUILD_APP)
     add_executable(
         srgba_app WIN32
         src/app/application.cpp
+        src/app/input.cpp
         src/app/main.cpp
         src/app/settings.cpp
     )
     set_target_properties(srgba_app PROPERTIES OUTPUT_NAME SRGBA)
     target_compile_features(srgba_app PRIVATE cxx_std_20)
     target_include_directories(srgba_app PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_definitions(srgba_app PRIVATE SRGBA_VERSION="${PROJECT_VERSION}")
     target_link_libraries(
         srgba_app
         PRIVATE
@@ -68,6 +88,18 @@ if(SRGBA_BUILD_APP)
 
     install(TARGETS srgba_app RUNTIME DESTINATION .)
     install(FILES README.md LICENSE DESTINATION .)
+
+    set(SRGBA_DEMO_ROM "${CMAKE_BINARY_DIR}/samples/SRGBA-demo.gba")
+    add_custom_command(
+        OUTPUT "${SRGBA_DEMO_ROM}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/samples"
+        COMMAND srgba_make_demo_rom "${SRGBA_DEMO_ROM}"
+        DEPENDS srgba_make_demo_rom
+        COMMENT "Generating the SRGBA demo ROM"
+        VERBATIM
+    )
+    add_custom_target(srgba_demo_rom ALL DEPENDS "${SRGBA_DEMO_ROM}")
+    install(FILES "${SRGBA_DEMO_ROM}" DESTINATION samples)
     install(
         FILES "${SRGBA_SDL_SOURCE_DIR}/LICENSE.txt"
         DESTINATION licenses
@@ -109,16 +141,22 @@ if(SRGBA_BUILD_TESTS)
     add_executable(
         srgba_tests
         tests/arm7tdmi_state_tests.cpp
+        tests/arm_extended_instruction_tests.cpp
         tests/arm_instruction_tests.cpp
+        tests/demo_rom_tests.cpp
         tests/emulator_tests.cpp
         tests/gba_bus_tests.cpp
+        tests/hle_bios_tests.cpp
+        tests/interrupt_keypad_tests.cpp
         tests/memory_instruction_tests.cpp
+        tests/ppu_tests.cpp
         tests/rom_header_tests.cpp
+        tests/scheduler_tests.cpp
         tests/thumb_instruction_tests.cpp
     )
     target_compile_features(srgba_tests PRIVATE cxx_std_20)
     target_include_directories(srgba_tests PRIVATE "${PROJECT_SOURCE_DIR}/tests")
-    target_link_libraries(srgba_tests PRIVATE SRGBA::core Catch2::Catch2WithMain)
+    target_link_libraries(srgba_tests PRIVATE SRGBA::core srgba_homebrew Catch2::Catch2WithMain)
     srgba_set_project_warnings(srgba_tests)
 
     include(Catch)

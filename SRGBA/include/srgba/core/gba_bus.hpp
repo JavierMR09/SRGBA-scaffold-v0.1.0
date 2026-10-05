@@ -1,5 +1,7 @@
 #pragma once
 
+#include "srgba/core/interrupts.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -87,6 +89,34 @@ class GbaBus {
     [[nodiscard]] bool game_pak_prefetch_enabled() const noexcept;
     [[nodiscard]] std::uint8_t post_boot_flag() const noexcept;
 
+    // Built-in system ROM used when no user BIOS is attached. It provides the hardware exception
+    // vectors and the interrupt dispatcher; SWI calls are completed by the HLE BIOS.
+    [[nodiscard]] bool using_builtin_bios() const noexcept;
+    void set_bios_latch(std::uint32_t value) noexcept;
+
+    // Interrupt controller (IE, IF, IME).
+    void request_interrupt(Interrupt interrupt) noexcept;
+    void request_interrupts(std::uint16_t mask) noexcept;
+    [[nodiscard]] std::uint16_t interrupt_enable() const noexcept;
+    [[nodiscard]] std::uint16_t interrupt_flags() const noexcept;
+    [[nodiscard]] bool interrupt_master_enable() const noexcept;
+    [[nodiscard]] bool interrupt_pending() const noexcept;
+
+    // Returns true once after the CPU writes HALTCNT.
+    [[nodiscard]] bool take_halt_request() noexcept;
+
+    // Keypad. `pressed` is an active-high mask of srgba::core::Key bits.
+    void set_pressed_keys(std::uint16_t pressed) noexcept;
+    [[nodiscard]] std::uint16_t key_input() const noexcept;
+
+    // Video-facing views used by the PPU.
+    [[nodiscard]] std::uint16_t io_register16(std::uint32_t offset) const noexcept;
+    void set_display_status_flags(std::uint8_t flags) noexcept;
+    void set_vcount(std::uint8_t line) noexcept;
+    [[nodiscard]] std::span<const std::uint8_t> palette_ram() const noexcept;
+    [[nodiscard]] std::span<const std::uint8_t> video_ram() const noexcept;
+    [[nodiscard]] std::span<const std::uint8_t> object_attribute_memory() const noexcept;
+
   private:
     enum class Region : std::uint8_t {
         Bios,
@@ -117,6 +147,7 @@ class GbaBus {
                                               AccessSequence sequence) const noexcept;
     [[nodiscard]] std::uint32_t game_pak_cycles(std::uint32_t address, std::size_t access_width,
                                                 AccessSequence sequence) const noexcept;
+    void update_keypad_interrupt() noexcept;
 
     std::vector<std::uint8_t> bios_;
     std::span<const std::uint8_t> game_pak_{};
@@ -132,6 +163,8 @@ class GbaBus {
     std::uint32_t bios_crc32_{};
     std::uint32_t bios_latch_{};
     std::uint32_t open_bus_{};
+    std::uint16_t key_input_{kKeyMask};
+    bool halt_requested_{};
 };
 
 } // namespace srgba::core

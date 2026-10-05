@@ -3,10 +3,25 @@
 SRGBA is a clean-room Game Boy Advance emulator project written in C++20. The initial target is
 Windows 10/11 x64, with a platform-independent emulation core and an SDL3 desktop frontend.
 
-> **Project status:** M2 GBA bus and boot foundation. SRGBA now fetches ARM and Thumb code from a
-> hardware-mapped Game Pak, executes the base load/store families, and supports direct or
-> user-BIOS boot paths. Video remains a diagnostic placeholder until M3, and commercial-game
-> compatibility is not expected yet.
+> **Project status:** M3 scheduling, interrupts, input, and bitmap video. SRGBA runs homebrew that
+> draws with bitmap modes 3-5, waits on VBlank through the BIOS, and reads the keypad, with no BIOS
+> dump required. Tile graphics (used by most commercial games), sound, and saves arrive in M4-M5,
+> so commercial-game compatibility is not expected yet.
+
+## Try it
+
+Download the latest `SRGBA-windows-x64` ZIP, extract it anywhere, and run `SRGBA.exe`. Open
+`samples/SRGBA-demo.gba` to try the bundled demo: move the square with the arrow keys (or a
+controller's D-pad) and hold **X** (GBA A) to change its color.
+
+| GBA      | Keyboard                 | Controller                     |
+|----------|--------------------------|--------------------------------|
+| A        | X                        | A / Cross (bottom face button) |
+| B        | Z                        | B / Circle (right face button) |
+| L / R    | A / S                    | Left / right bumper            |
+| Start    | Enter                    | Start / Menu                   |
+| Select   | Backspace or Right Shift | Back / View                    |
+| D-pad    | Arrow keys               | D-pad or left stick            |
 
 ## What works in this scaffold
 
@@ -30,6 +45,17 @@ Windows 10/11 x64, with a platform-independent emulation core and an SDL3 deskto
 - Validated 16 KiB user BIOS loading with protected reads outside BIOS execution
 - Default post-BIOS direct boot for legally distributed homebrew without a proprietary BIOS
 - Generated CPU-focused test ROM that executes code from Game Pak and writes results to EWRAM
+- ARM MRS/MSR, MUL/MLA, long multiplies, SWP/SWPB, and exception-return block transfers
+- Deterministic master-cycle scheduler with HALT fast-forwarding
+- Scanline, HBlank, VBlank, and VCount timing with DISPSTAT/VCOUNT registers
+- Interrupt controller (IE, IF, IME) and IRQ delivery through the BIOS dispatcher
+- Keypad registers and keypad interrupts, mapped to keyboard and SDL gamepads
+- Bitmap video modes 3, 4 (with page flipping), and 5, forced blank, and backdrop color
+- Built-in replacement BIOS: original IRQ dispatcher plus high-level emulation of the common BIOS
+  calls (VBlankIntrWait, IntrWait, Halt, Div, Sqrt, ArcTan2, CpuSet, CpuFastSet, LZ77, Huffman,
+  run-length, BitUnPack, affine setup, and more)
+- Frame pacing at the GBA's native ~59.73 Hz, independent of monitor refresh rate
+- An original demo ROM, generated at build time and shipped in `samples/`
 - Isolated, testable `srgba_core` library
 - Automated core tests on Linux and full application builds on Windows
 - GitHub Actions release ZIP generation
@@ -81,9 +107,10 @@ ctest --preset core-dev
 
 ```text
 include/srgba/core/   Public, platform-independent core API
-src/core/             ARM7TDMI, GBA bus, cartridge, and emulator-core implementation
+src/core/             ARM7TDMI, bus, scheduler, PPU, HLE BIOS, and emulator-core implementation
 src/app/              SDL3 and Dear ImGui desktop frontend
-tests/                Unit and lifecycle tests
+tests/                Unit, instruction, hardware, and integration tests
+tools/homebrew/       Small ARM assembler and the original SRGBA demo ROM
 cmake/                Dependency and compiler-warning configuration
 docs/                 Architecture, references, and milestone roadmap
 .github/workflows/    Continuous integration and tagged releases
@@ -99,7 +126,8 @@ proprietary GBA BIOS. Users are responsible for supplying legally obtained softw
 file patterns are excluded from Git by default.
 
 Direct boot is enabled by default and initializes the CPU, stack banks, and minimum post-BIOS IO
-state before starting at `0x08000000`. To use your own BIOS, choose **File > Load BIOS**, select an
+state before starting at `0x08000000`. Without a BIOS file, SRGBA uses its own small replacement
+system ROM and implements BIOS calls in C++; none of it is derived from Nintendo's BIOS. To use your own BIOS, choose **File > Load BIOS**, select an
 exactly 16 KiB image, then choose **Use loaded BIOS** in Settings. SRGBA stores only the path in its
 local settings; the BIOS is never copied into a build or release package.
 

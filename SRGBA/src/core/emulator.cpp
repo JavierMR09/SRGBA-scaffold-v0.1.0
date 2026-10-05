@@ -1,5 +1,8 @@
 #include "srgba/core/emulator.hpp"
 
+#include "srgba/core/hle_bios.hpp"
+#include "srgba/core/system_bios.hpp"
+
 #include <algorithm>
 #include <exception>
 #include <utility>
@@ -7,11 +10,8 @@
 namespace srgba::core {
 namespace {
 
-constexpr std::uint32_t kMasterCyclesPerFrame = 280896U;
-
-[[nodiscard]] constexpr std::uint8_t as_byte(const std::size_t value) noexcept {
-    return static_cast<std::uint8_t>(value & 0xFFU);
-}
+constexpr std::uint64_t kMasterCyclesPerFrame = Ppu::kCyclesPerFrame;
+static_assert(kMasterCyclesPerFrame == 280896U);
 
 } // namespace
 
@@ -26,7 +26,6 @@ bool Emulator::load_rom(const std::filesystem::path& path, std::string& error_me
         bus_.set_game_pak(cartridge_->bytes());
         reset_machine();
         error_message.clear();
-        render_scaffold_frame();
         return true;
     } catch (const std::exception& exception) {
         error_message = exception.what();
@@ -49,10 +48,12 @@ void Emulator::unload_rom() noexcept {
     cartridge_.reset();
     bus_.reset();
     cpu_.reset();
+    scheduler_.reset();
     state_ = RunState::Empty;
     frame_counter_ = 0;
     instruction_counter_ = 0;
-    cycle_counter_ = 0;
+    halted_ = false;
+    fault_.reset();
     render_idle_frame();
 }
 
@@ -69,7 +70,6 @@ void Emulator::reset() noexcept {
         return;
     }
     reset_machine();
-    render_scaffold_frame();
 }
 
 void Emulator::run_frame() noexcept {
@@ -77,16 +77,16 @@ void Emulator::run_frame() noexcept {
         return;
     }
 
-    std::uint32_t elapsed_cycles = 0;
-    while (state_ == RunState::Running && elapsed_cycles < kMasterCyclesPerFrame) {
-        const auto result = step_instruction();
-        if (!result) {
+    // Frames are aligned to the PPU: line 0 starts at every multiple of 280,896 cycles.
+    const auto frame_end = (scheduler_.now() / kMasterCyclesPerFrame + 1U) * kMasterCyclesPerFrame;
+    while (state_ == RunState::Running && scheduler_.now() < frame_end) {
+        if (!step_instruction()) {
             break;
         }
-        elapsed_cycles += std::max(result->cycles, 1U);
     }
-    ++frame_counter_;
-    render_scaffold_frame();
+    if (scheduler_.now() >= frame_end) {
+        ++frame_counter_;
+    }
 }
 
 std::optional<ExecutionResult> Emulator::step_instruction() noexcept {
@@ -94,14 +94,40 @@ std::optional<ExecutionResult> Emulator::step_instruction() noexcept {
         return std::nullopt;
     }
 
-    auto result = cpu_.step(bus_);
-    ++instruction_counter_;
-    cycle_counter_ += result.cycles;
-    if (result.status == ExecutionStatus::UnsupportedInstruction ||
-        result.status == ExecutionStatus::WrongInstructionSet) {
-        state_ = RunState::Paused;
+    ExecutionResult result{};
+    if (halted_) {
+        result.cycles = static_cast<std::uint32_t>(scheduler_.skip_to_next_event());
+    } else if (bus_.using_builtin_bios() &&
+               cpu_.program_counter() == builtin_bios::kSoftwareInterruptVector &&
+               cpu_.cpsr().mode() == ProcessorMode::Supervisor &&
+               cpu_.cpsr().instruction_set() == InstructionSet::Arm) {
+        result.cycles = HleBios::handle_swi(cpu_, bus_);
+        result.pipeline_flushed = true;
+        ++instruction_counter_;
+        scheduler_.advance(result.cycles);
+    } else {
+        result = cpu_.step(bus_);
+        ++instruction_counter_;
+        if (result.status == ExecutionStatus::UnsupportedInstruction ||
+            result.status == ExecutionStatus::WrongInstructionSet) {
+            record_fault();
+            state_ = RunState::Paused;
+            return result;
+        }
+        scheduler_.advance(std::max(result.cycles, 1U));
     }
+
+    if (bus_.take_halt_request()) {
+        halted_ = true;
+    }
+    process_events();
+    service_interrupts();
     return result;
+}
+
+void Emulator::set_pressed_keys(const std::uint16_t pressed) noexcept {
+    pressed_keys_ = static_cast<std::uint16_t>(pressed & kKeyMask);
+    bus_.set_pressed_keys(pressed_keys_);
 }
 
 void Emulator::set_paused(const bool paused) noexcept {
@@ -118,7 +144,6 @@ void Emulator::set_boot_mode(const BootMode mode) noexcept {
     boot_mode_ = mode;
     if (cartridge_) {
         reset_machine();
-        render_scaffold_frame();
     }
 }
 
@@ -132,6 +157,18 @@ bool Emulator::has_bios() const noexcept {
 
 bool Emulator::is_paused() const noexcept {
     return state_ == RunState::Paused;
+}
+
+bool Emulator::is_halted() const noexcept {
+    return halted_;
+}
+
+const std::optional<CpuFault>& Emulator::fault() const noexcept {
+    return fault_;
+}
+
+std::uint16_t Emulator::pressed_keys() const noexcept {
+    return pressed_keys_;
 }
 
 bool Emulator::booting_through_bios() const noexcept {
@@ -167,7 +204,7 @@ std::uint64_t Emulator::instruction_counter() const noexcept {
 }
 
 std::uint64_t Emulator::cycle_counter() const noexcept {
-    return cycle_counter_;
+    return scheduler_.now();
 }
 
 const Framebuffer& Emulator::framebuffer() const noexcept {
@@ -176,6 +213,14 @@ const Framebuffer& Emulator::framebuffer() const noexcept {
 
 const Arm7Tdmi& Emulator::cpu() const noexcept {
     return cpu_;
+}
+
+const Ppu& Emulator::ppu() const noexcept {
+    return ppu_;
+}
+
+const Scheduler& Emulator::scheduler() const noexcept {
+    return scheduler_;
 }
 
 GbaBus& Emulator::bus() noexcept {
@@ -194,10 +239,52 @@ void Emulator::reset_machine() noexcept {
     } else {
         initialize_direct_boot();
     }
+    bus_.set_pressed_keys(pressed_keys_);
+    scheduler_.reset();
+    ppu_.reset(bus_, scheduler_);
+    halted_ = false;
+    fault_.reset();
+    clear_framebuffer();
     state_ = cartridge_ ? RunState::Running : RunState::Empty;
     frame_counter_ = 0;
     instruction_counter_ = 0;
-    cycle_counter_ = 0;
+}
+
+void Emulator::process_events() noexcept {
+    while (const auto event = scheduler_.pop_due()) {
+        switch (event->type) {
+        case EventType::HBlankStart:
+            ppu_.on_hblank_start(bus_, scheduler_, event->timestamp, framebuffer_);
+            break;
+        case EventType::ScanlineEnd:
+            ppu_.on_scanline_end(bus_, scheduler_, event->timestamp);
+            break;
+        case EventType::Count:
+            break;
+        }
+    }
+}
+
+void Emulator::service_interrupts() noexcept {
+    if (!bus_.interrupt_pending()) {
+        return;
+    }
+    // Any enabled request wakes the CPU from HALT, even when IME or CPSR.I masks the exception.
+    halted_ = false;
+    if (bus_.interrupt_master_enable() && cpu_.try_take_irq()) {
+        // Exception entry refills the pipeline (2S + 1N).
+        scheduler_.advance(3);
+        process_events();
+    }
+}
+
+void Emulator::record_fault() noexcept {
+    const auto address = cpu_.program_counter();
+    const auto set = cpu_.cpsr().instruction_set();
+    const BusAccess access{AccessSequence::NonSequential, AccessKind::Data, address};
+    const auto opcode = set == InstructionSet::Arm ? bus_.read32(address, access).value
+                                                   : bus_.read16(address, access).value;
+    fault_ = CpuFault{address, opcode, set};
 }
 
 void Emulator::initialize_direct_boot() noexcept {
@@ -230,46 +317,8 @@ void Emulator::render_idle_frame() noexcept {
     }
 }
 
-void Emulator::render_scaffold_frame() noexcept {
-    constexpr std::size_t block_size = 16;
-    const auto animation_offset = static_cast<std::size_t>((frame_counter_ / 4U) % block_size);
-
-    for (std::size_t y = 0; y < kScreenHeight; ++y) {
-        for (std::size_t x = 0; x < kScreenWidth; ++x) {
-            const auto index = y * kScreenWidth + x;
-            const bool alternate =
-                (((x + animation_offset) / block_size) + (y / block_size)) % 2U == 0U;
-            const auto horizontal = as_byte((x * 80U) / kScreenWidth);
-            const auto vertical = as_byte((y * 55U) / kScreenHeight);
-
-            if (alternate) {
-                framebuffer_[index] = Rgba8{
-                    static_cast<std::uint8_t>(32U + horizontal),
-                    static_cast<std::uint8_t>(74U + vertical),
-                    static_cast<std::uint8_t>(138U + horizontal / 2U),
-                    255,
-                };
-            } else {
-                framebuffer_[index] = Rgba8{
-                    static_cast<std::uint8_t>(18U + vertical / 2U),
-                    static_cast<std::uint8_t>(32U + horizontal / 3U),
-                    static_cast<std::uint8_t>(72U + vertical),
-                    255,
-                };
-            }
-        }
-    }
-
-    // A bright frame makes it obvious that this is scaffold output, not emulated video.
-    constexpr Rgba8 border{86, 215, 255, 255};
-    for (std::size_t x = 0; x < kScreenWidth; ++x) {
-        framebuffer_[x] = border;
-        framebuffer_[(kScreenHeight - 1U) * kScreenWidth + x] = border;
-    }
-    for (std::size_t y = 0; y < kScreenHeight; ++y) {
-        framebuffer_[y * kScreenWidth] = border;
-        framebuffer_[y * kScreenWidth + (kScreenWidth - 1U)] = border;
-    }
+void Emulator::clear_framebuffer() noexcept {
+    framebuffer_.fill(Rgba8{0, 0, 0, 255});
 }
 
 } // namespace srgba::core

@@ -4,6 +4,8 @@
 #include "srgba/core/cartridge.hpp"
 #include "srgba/core/framebuffer.hpp"
 #include "srgba/core/gba_bus.hpp"
+#include "srgba/core/ppu.hpp"
+#include "srgba/core/scheduler.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -23,6 +25,14 @@ enum class BootMode {
     Bios,
 };
 
+// Describes the instruction that stopped emulation when the CPU met an encoding SRGBA does not
+// implement yet.
+struct CpuFault {
+    std::uint32_t address{};
+    std::uint32_t opcode{};
+    InstructionSet instruction_set{InstructionSet::Arm};
+};
+
 class Emulator {
   public:
     Emulator();
@@ -32,14 +42,21 @@ class Emulator {
     void unload_rom() noexcept;
     void unload_bios() noexcept;
     void reset() noexcept;
+    // Runs until the next frame boundary (280,896 master cycles per frame, ~59.73 Hz).
     void run_frame() noexcept;
+    // Executes one instruction, or skips one halted span up to the next hardware event.
     [[nodiscard]] std::optional<ExecutionResult> step_instruction() noexcept;
+    // Active-high mask of srgba::core::Key bits.
+    void set_pressed_keys(std::uint16_t pressed) noexcept;
     void set_paused(bool paused) noexcept;
     void set_boot_mode(BootMode mode) noexcept;
 
     [[nodiscard]] bool has_rom() const noexcept;
     [[nodiscard]] bool has_bios() const noexcept;
     [[nodiscard]] bool is_paused() const noexcept;
+    [[nodiscard]] bool is_halted() const noexcept;
+    [[nodiscard]] const std::optional<CpuFault>& fault() const noexcept;
+    [[nodiscard]] std::uint16_t pressed_keys() const noexcept;
     [[nodiscard]] bool booting_through_bios() const noexcept;
     [[nodiscard]] RunState state() const noexcept;
     [[nodiscard]] BootMode boot_mode() const noexcept;
@@ -51,24 +68,33 @@ class Emulator {
     [[nodiscard]] std::uint64_t cycle_counter() const noexcept;
     [[nodiscard]] const Framebuffer& framebuffer() const noexcept;
     [[nodiscard]] const Arm7Tdmi& cpu() const noexcept;
+    [[nodiscard]] const Ppu& ppu() const noexcept;
+    [[nodiscard]] const Scheduler& scheduler() const noexcept;
     [[nodiscard]] GbaBus& bus() noexcept;
     [[nodiscard]] const GbaBus& bus() const noexcept;
 
   private:
     void reset_machine() noexcept;
     void initialize_direct_boot() noexcept;
+    void process_events() noexcept;
+    void service_interrupts() noexcept;
+    void record_fault() noexcept;
     void render_idle_frame() noexcept;
-    void render_scaffold_frame() noexcept;
+    void clear_framebuffer() noexcept;
 
     std::optional<Cartridge> cartridge_;
     Arm7Tdmi cpu_{};
     GbaBus bus_{};
     Framebuffer framebuffer_{};
+    Ppu ppu_{};
+    Scheduler scheduler_{};
+    std::optional<CpuFault> fault_;
     RunState state_{RunState::Empty};
     BootMode boot_mode_{BootMode::Direct};
     std::uint64_t frame_counter_{};
     std::uint64_t instruction_counter_{};
-    std::uint64_t cycle_counter_{};
+    std::uint16_t pressed_keys_{};
+    bool halted_{};
 };
 
 } // namespace srgba::core

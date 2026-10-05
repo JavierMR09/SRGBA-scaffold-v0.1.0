@@ -1,10 +1,12 @@
 #pragma once
 
+#include "app/input.hpp"
 #include "app/settings.hpp"
 #include "srgba/core/emulator.hpp"
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -68,6 +70,7 @@ class Application {
     SDL_Renderer* renderer_{};
     SDL_Texture* framebuffer_texture_{};
     core::Emulator emulator_;
+    InputMapper input_;
     Settings settings_;
     std::filesystem::path settings_path_;
 
@@ -81,6 +84,9 @@ class Application {
     bool file_dialog_open_{};
     FileDialogPurpose file_dialog_purpose_{FileDialogPurpose::None};
     bool status_is_error_{};
+    bool fault_reported_{};
+    std::uint64_t last_update_ns_{};
+    std::uint64_t frame_time_accumulator_ns_{};
     std::string status_message_{"Ready"};
 
     std::mutex file_dialog_mutex_;
