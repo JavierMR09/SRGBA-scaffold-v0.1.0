@@ -329,7 +329,8 @@ void Ppu::render_text_background(const GbaBus& bus, const std::size_t background
         } else {
             const auto address = character_base + tile * 32U + pixel_y * 4U + pixel_x / 2U;
             if (address < kBackgroundVramLimit) {
-                const auto index = (vram[address] >> ((pixel_x & 1U) * 4U)) & 0xFU;
+                const auto index =
+                    (static_cast<unsigned>(vram[address]) >> ((pixel_x & 1U) * 4U)) & 0xFU;
                 if (index != 0U) {
                     color = palette_color(palette, ((entry >> 12U) & 0xFU) * 16U + index);
                 }

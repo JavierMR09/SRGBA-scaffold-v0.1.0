@@ -42,17 +42,22 @@
 - [x] ARM PSR transfer, multiply, long multiply, swap, and user-bank block transfers
 - [x] Built-in replacement BIOS with HLE software interrupts
 
-## M4 - DMA, timers, and complete PPU (next)
+## M4 - DMA, timers, and complete PPU (complete)
 
-- [ ] Four DMA channels and trigger timing
-- [ ] Four hardware timers and cascading
-- [ ] Regular and affine backgrounds (including affine BG2 in bitmap modes)
-- [ ] Game Pak prefetch buffer timing
-- [ ] Sprites and object attributes
-- [ ] Windows, blending, mosaic, and layer priority
-- [ ] PPU regression suite
+- [x] Four DMA channels and trigger timing
+- [x] Four hardware timers and cascading
+- [x] Regular and affine backgrounds (including affine BG2 in bitmap modes)
+- [x] Sprites and object attributes
+- [x] Windows, blending, mosaic, and layer priority
+- [x] PPU regression suite
+- [x] Game Pak prefetch buffer timing (approximation)
+- [x] Two-stage CPU prefetch pipeline; public ARM/Thumb/memory/BIOS/NES suites pass in CI
+- [x] Second demo ROM exercising DMA, timers, tiles, sprites, windows, and blending
 
-## M5 - Audio and cartridge persistence
+Deferred: per-line sprite rendering cycle limits, DMA3 video-capture mode, and cycle-exact BIOS
+call timing (the HLE BIOS returns correct results but not Nintendo's exact cycle counts).
+
+## M5 - Audio and cartridge persistence (next)
 
 - [ ] PSG square, wave, and noise channels
 - [ ] Direct Sound FIFOs and DMA integration

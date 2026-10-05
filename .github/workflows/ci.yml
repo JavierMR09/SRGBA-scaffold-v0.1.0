@@ -33,7 +33,17 @@ jobs:
       - name: Build
         run: cmake --build build/core --parallel
 
+      - name: Fetch public test ROMs
+        # jsmolka/gba-tests (MIT), pinned for reproducible results.
+        working-directory: ${{ runner.temp }}
+        run: |
+          git init gba-tests
+          git -C gba-tests fetch --depth 1 https://github.com/jsmolka/gba-tests.git a7113b67e63f83a9b321696ddd7042ccfad6c881
+          git -C gba-tests checkout FETCH_HEAD
+
       - name: Test
+        env:
+          SRGBA_GBA_TESTS_DIR: ${{ runner.temp }}/gba-tests
         run: ctest --test-dir build/core --output-on-failure
 
   windows-app:

@@ -87,6 +87,9 @@ class Application {
     bool fault_reported_{};
     std::uint64_t last_update_ns_{};
     std::uint64_t frame_time_accumulator_ns_{};
+    std::uint64_t fps_window_start_ns_{};
+    std::uint32_t frames_this_window_{};
+    double measured_fps_{};
     std::string status_message_{"Ready"};
 
     std::mutex file_dialog_mutex_;

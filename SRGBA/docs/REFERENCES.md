@@ -34,8 +34,12 @@ sequential/non-sequential cycle classification and data-bus width behavior.
 
 ## Accuracy tests
 
+- [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) (MIT): ARM, Thumb, memory, BIOS, and
+  NES (pipeline/DMA) suites. CI downloads a pinned commit and requires every suite to pass; the
+  ROMs are never committed to this repository.
+- [PeterLemon/GBA](https://github.com/PeterLemon/GBA): bare-metal demos used for manual visual
+  checks of tile, affine, Mode 7, sprite, BIOS, and timer behavior during M4.
 - [mGBA test suite discussion](https://forums.mgba.io/showthread.php?tid=18)
-- Additional public ARM and GBA test suites will be reviewed for licensing before inclusion.
 
 ## Reference priority
 

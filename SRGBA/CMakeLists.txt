@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SRGBA
-    VERSION 0.4.0
+    VERSION 0.5.0
     DESCRIPTION "A clean-room Game Boy Advance emulator"
     LANGUAGES CXX
 )
@@ -51,6 +51,7 @@ add_library(
     srgba_homebrew STATIC
     tools/homebrew/arm_assembler.cpp
     tools/homebrew/demo_rom.cpp
+    tools/homebrew/tiles_demo_rom.cpp
 )
 target_include_directories(srgba_homebrew PUBLIC "${PROJECT_SOURCE_DIR}/tools/homebrew")
 target_link_libraries(srgba_homebrew PUBLIC SRGBA::core)
@@ -91,17 +92,17 @@ if(SRGBA_BUILD_APP)
     install(TARGETS srgba_app RUNTIME DESTINATION .)
     install(FILES README.md LICENSE DESTINATION .)
 
-    set(SRGBA_DEMO_ROM "${CMAKE_BINARY_DIR}/samples/SRGBA-demo.gba")
+    set(SRGBA_SAMPLES_DIR "${CMAKE_BINARY_DIR}/samples")
+    set(SRGBA_DEMO_ROMS "${SRGBA_SAMPLES_DIR}/SRGBA-demo.gba" "${SRGBA_SAMPLES_DIR}/SRGBA-tiles-demo.gba")
     add_custom_command(
-        OUTPUT "${SRGBA_DEMO_ROM}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/samples"
-        COMMAND srgba_make_demo_rom "${SRGBA_DEMO_ROM}"
+        OUTPUT ${SRGBA_DEMO_ROMS}
+        COMMAND srgba_make_demo_rom "${SRGBA_SAMPLES_DIR}"
         DEPENDS srgba_make_demo_rom
-        COMMENT "Generating the SRGBA demo ROM"
+        COMMENT "Generating the SRGBA demo ROMs"
         VERBATIM
     )
-    add_custom_target(srgba_demo_rom ALL DEPENDS "${SRGBA_DEMO_ROM}")
-    install(FILES "${SRGBA_DEMO_ROM}" DESTINATION samples)
+    add_custom_target(srgba_demo_rom ALL DEPENDS ${SRGBA_DEMO_ROMS})
+    install(FILES ${SRGBA_DEMO_ROMS} DESTINATION samples)
     install(
         FILES "${SRGBA_SDL_SOURCE_DIR}/LICENSE.txt"
         DESTINATION licenses
@@ -152,6 +153,7 @@ if(SRGBA_BUILD_TESTS)
         tests/interrupt_keypad_tests.cpp
         tests/memory_instruction_tests.cpp
         tests/ppu_scene_tests.cpp
+        tests/public_test_rom_tests.cpp
         tests/ppu_tests.cpp
         tests/rom_header_tests.cpp
         tests/scheduler_tests.cpp

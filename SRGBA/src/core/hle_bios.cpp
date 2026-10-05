@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <initializer_list>
 #include <limits>
 #include <numbers>
 #include <vector>
