@@ -36,6 +36,8 @@ Settings Settings::load(const std::filesystem::path& path) noexcept {
         settings.scale_filter = parse_scale_filter(json.value("scale_filter", "nearest"));
         settings.boot_through_bios = json.value("boot_through_bios", false);
         settings.bios_path = json.value("bios_path", std::string{});
+        settings.audio_volume = std::clamp(json.value("audio_volume", 80), 0, 100);
+        settings.audio_muted = json.value("audio_muted", false);
 
         if (json.contains("recent_roms") && json["recent_roms"].is_array()) {
             for (const auto& item : json["recent_roms"]) {
@@ -62,6 +64,8 @@ void Settings::save(const std::filesystem::path& path) const noexcept {
             {"scale_filter", scale_filter_name(scale_filter)},
             {"boot_through_bios", boot_through_bios},
             {"bios_path", bios_path},
+            {"audio_volume", audio_volume},
+            {"audio_muted", audio_muted},
             {"recent_roms", recent_roms},
         };
 

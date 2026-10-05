@@ -32,6 +32,7 @@ inline void write_word(std::vector<std::uint8_t>& bytes, const std::size_t offse
 
 [[nodiscard]] inline std::vector<std::uint8_t> make_valid_test_rom() {
     std::vector<std::uint8_t> bytes(256, 0);
+    write_word(bytes, 0, 0xEAFFFFFEU); // entry point: B . (idle loop)
     write_ascii(bytes, 0xA0, 12, "SRGBA TEST");
     write_ascii(bytes, 0xAC, 4, "SRGE");
     write_ascii(bytes, 0xB0, 2, "01");

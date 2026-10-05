@@ -9,8 +9,7 @@
 
 namespace srgba::core {
 
-// Every hardware event that can be raised on the master clock. Later milestones append audio and
-// serial events here.
+// Every hardware event that can be raised on the master clock.
 enum class EventType : std::uint8_t {
     HBlankStart,
     ScanlineEnd,
@@ -18,6 +17,8 @@ enum class EventType : std::uint8_t {
     Timer1Overflow,
     Timer2Overflow,
     Timer3Overflow,
+    ApuSample,
+    ApuSequencer,
     Count,
 };
 

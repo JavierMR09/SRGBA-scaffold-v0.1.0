@@ -125,6 +125,25 @@ written, and advance by (PB, PD) after every line.
 The bus serves aligned 16/32-bit accesses to RAM, video memory, and ROM through direct pointers,
 and the scheduler caches its next deadline so the per-instruction event check is a single compare.
 
+## M5 sound and battery saves
+
+`Apu` owns the sound registers (0x060-0x0AF). Two scheduler events drive it: a 32,768 Hz sample
+event and the 512 Hz frame sequencer that clocks length counters (256 Hz), the channel 1 sweep
+(128 Hz), and envelopes (64 Hz). Each sample integrates every channel's output over its 512-cycle
+window (a box filter), so high-pitched squares and Direct Sound streams faster than 32 kHz do not
+alias. Timer overflows pop the Direct Sound FIFOs; a FIFO at most half full asks DMA1/DMA2 (in
+"special" timing) for four more words. Mixing follows the hardware's 10-bit range around
+SOUNDBIAS and is scaled to 16-bit PCM; the frontend hands it to an SDL audio stream, which
+resamples to the device rate, and drops batches if the queue grows past 125 ms.
+
+`BackupMemory` models the cartridge save chip chosen from the SDK tag in the ROM. SRAM and Flash
+sit on an 8-bit bus (wider reads repeat the byte, wider writes store the byte lane the address
+selects); Flash implements its unlock/command sequences, ID mode, sector and chip erase, and bank
+switching; EEPROM decodes the serial read/write protocol and infers its size from the length of
+the first DMA transfer. The emulator saves "<rom>.sav" half a second after writes stop, when the
+ROM closes, and on shutdown, writing a temporary file and renaming it over the old save. Save data
+survives console resets.
+
 ## Planned core modules
 
 ```text
@@ -150,7 +169,7 @@ Emulator
 
 ## Persistence rules
 
-- Battery saves will be keyed by ROM identity and written through a temporary file.
+- Battery saves are stored as "<rom name>.sav" beside the ROM and written through a temporary file.
 - Save states will start with a magic value, schema version, ROM hash, and component sections.
 - Unsupported future state versions must fail cleanly rather than partially loading.
 - Frontend settings are not part of an emulated save state.

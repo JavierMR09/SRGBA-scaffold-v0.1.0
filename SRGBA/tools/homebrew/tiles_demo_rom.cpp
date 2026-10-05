@@ -157,9 +157,18 @@ std::vector<std::uint8_t> build_tiles_demo_rom() {
     a.strh(1, 2, 0); // IE = VBlank
     a.strh(1, 2, 8); // IME = 1
 
+    // Sound: master on, every PSG channel on both sides at full volume.
+    a.mov_imm(1, 0x80U);
+    a.strh(1, 0, 0x84); // SOUNDCNT_X
+    a.load_constant(1, 0xFF77U);
+    a.strh(1, 0, 0x80); // SOUNDCNT_L
+    a.mov_imm(1, 0x0002U);
+    a.strh(1, 0, 0x82); // SOUNDCNT_H: PSG at 100%
+
     a.mov_imm(4, kTilesDemoStartX);
     a.mov_imm(5, kTilesDemoStartY);
     a.mov_imm(6, 0);             // scroll position
+    a.mov_imm(7, 0);             // buttons held last frame (A, B)
     a.load_constant(1, 0x3140U); // DISPCNT: mode 0, BG0, OBJ (1D), window 0
     a.strh(1, 0);
 
@@ -178,6 +187,28 @@ std::vector<std::uint8_t> build_tiles_demo_rom() {
     a.sub_imm(5, 5, 2, Condition::Equal);
     a.tst_imm(1, 0x80U);
     a.add_imm(5, 5, 2, Condition::Equal);
+    // A newly pressed: rising chirp on channel 1 (sweep). B: a noise burst on channel 4.
+    a.data_reg(Op::Mvn, 2, 0, 1);
+    a.and_imm(2, 2, 0x3U);
+    a.data_reg(Op::Bic, 3, 2, 7);
+    a.mov(7, 2);
+    a.tst_imm(3, 0x1U);
+    a.b("no_chirp", Condition::Equal);
+    a.mov_imm(8, 0x13U); // sweep: period 1, increase, shift 3
+    a.strh(8, 0, 0x60);
+    a.load_constant(8, 0xF180U); // volume 15, fade every 1/64 s, 50% duty
+    a.strh(8, 0, 0x62);
+    a.load_constant(8, 0x8000U | kTilesDemoChirpFrequency);
+    a.strh(8, 0, 0x64);
+    a.label("no_chirp");
+    a.tst_imm(3, 0x2U);
+    a.b("no_noise", Condition::Equal);
+    a.load_constant(8, 0xF200U); // volume 15, fade every 2/64 s
+    a.strh(8, 0, 0x78);
+    a.load_constant(8, 0x8052U); // trigger; shift 5, divisor 2
+    a.strh(8, 0, 0x7C);
+    a.label("no_noise");
+
     a.cmp_imm(4, 0);
     a.mov_imm(4, 0, Condition::LessThan);
     a.cmp_imm(4, 240 - kBallSize);

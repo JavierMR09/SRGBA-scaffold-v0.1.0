@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace srgba::core {
 
@@ -40,7 +41,21 @@ class Emulator {
     Emulator& operator=(const Emulator&) = delete;
     Emulator(Emulator&&) = delete;
     Emulator& operator=(Emulator&&) = delete;
-    ~Emulator() = default;
+    // Flushes any unsaved battery save.
+    ~Emulator();
+
+    // Battery saves are written as "<rom name>.sav" next to the ROM, or in `directory` when set.
+    // Disabling them keeps save memory in RAM only (used by tests and tools).
+    void set_save_directory(std::optional<std::filesystem::path> directory);
+    void set_battery_saves_enabled(bool enabled) noexcept;
+    // Writes pending save data now. Returns false when writing failed (see save_error()).
+    bool flush_save() noexcept;
+    [[nodiscard]] SaveType save_type() const noexcept;
+    [[nodiscard]] const std::filesystem::path& save_path() const noexcept;
+    [[nodiscard]] bool save_pending() const noexcept;
+    [[nodiscard]] const std::string& save_error() const noexcept;
+    // Increments each time save data reaches the disk (lets the frontend show a notice).
+    [[nodiscard]] std::uint64_t saves_written() const noexcept;
 
     [[nodiscard]] bool load_rom(const std::filesystem::path& path, std::string& error_message);
     [[nodiscard]] bool load_bios(const std::filesystem::path& path, std::string& error_message);
@@ -51,6 +66,9 @@ class Emulator {
     void run_frame() noexcept;
     // Executes one instruction, or skips one halted span up to the next hardware event.
     [[nodiscard]] std::optional<ExecutionResult> step_instruction() noexcept;
+    // Moves the audio generated so far (interleaved stereo int16 at Apu::kSampleRate) into
+    // `destination`.
+    void take_audio_samples(std::vector<std::int16_t>& destination);
     // Active-high mask of srgba::core::Key bits.
     void set_pressed_keys(std::uint16_t pressed) noexcept;
     void set_paused(bool paused) noexcept;
@@ -81,6 +99,8 @@ class Emulator {
   private:
     void reset_machine() noexcept;
     void initialize_direct_boot() noexcept;
+    void load_battery_save();
+    void update_autosave() noexcept;
     void process_events() noexcept;
     void service_interrupts() noexcept;
     void record_fault() noexcept;
@@ -100,6 +120,14 @@ class Emulator {
     std::uint64_t instruction_counter_{};
     std::uint16_t pressed_keys_{};
     bool halted_{};
+
+    std::optional<std::filesystem::path> save_directory_;
+    std::filesystem::path save_path_;
+    bool battery_saves_enabled_{true};
+    std::uint64_t observed_save_generation_{};
+    std::uint32_t frames_since_save_write_{};
+    std::uint64_t saves_written_{};
+    std::string save_error_;
 };
 
 } // namespace srgba::core

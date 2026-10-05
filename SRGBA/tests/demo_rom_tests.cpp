@@ -8,7 +8,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -185,6 +187,20 @@ TEST_CASE("The tiles demo exercises DMA, timers, tiles, sprites, windows, and bl
     }
     REQUIRE(bus.io_register16(0x010U) == scroll + 30U);
     REQUIRE(bus.io_register16(0x040U) != band);
+
+    // Pressing A plays a chirp on square channel 1; B plays noise on channel 4.
+    std::vector<std::int16_t> silence;
+    emulator.take_audio_samples(silence);
+    emulator.set_pressed_keys(static_cast<std::uint16_t>(Key::A));
+    emulator.run_frame();
+    REQUIRE((bus.read16(0x04000084U).value & 0x0001U) != 0U);
+    emulator.set_pressed_keys(static_cast<std::uint16_t>(Key::B));
+    emulator.run_frame();
+    REQUIRE((bus.read16(0x04000084U).value & 0x0008U) != 0U);
+    std::vector<std::int16_t> audio;
+    emulator.take_audio_samples(audio);
+    REQUIRE(std::any_of(audio.begin(), audio.end(),
+                        [](const std::int16_t sample) { return sample != 0; }));
 
     emulator.set_pressed_keys(Key::Left | Key::Down);
     for (int frame = 0; frame < 5; ++frame) {

@@ -1,6 +1,7 @@
 #include "srgba/core/emulator.hpp"
 
 #include "srgba/core/hle_bios.hpp"
+#include "srgba/core/save_file.hpp"
 #include "srgba/core/system_bios.hpp"
 
 #include <algorithm>
@@ -11,6 +12,9 @@ namespace srgba::core {
 namespace {
 
 constexpr std::uint64_t kMasterCyclesPerFrame = Ppu::kCyclesPerFrame;
+// Battery saves are written once the game has stopped writing for half a second.
+constexpr std::uint32_t kAutosaveDelayFrames = 30;
+constexpr std::size_t kMaximumSaveFileSize = 256U * 1024U;
 static_assert(kMasterCyclesPerFrame == 280896U);
 
 } // namespace
@@ -20,11 +24,18 @@ Emulator::Emulator() {
     render_idle_frame();
 }
 
+Emulator::~Emulator() {
+    static_cast<void>(flush_save());
+}
+
 bool Emulator::load_rom(const std::filesystem::path& path, std::string& error_message) {
     try {
         auto cartridge = Cartridge::load(path);
+        static_cast<void>(flush_save()); // keep the previous game's progress
         cartridge_ = std::move(cartridge);
         bus_.set_game_pak(cartridge_->bytes());
+        bus_.backup().configure(detect_save_type(cartridge_->bytes()));
+        load_battery_save();
         reset_machine();
         error_message.clear();
         return true;
@@ -45,6 +56,9 @@ bool Emulator::load_bios(const std::filesystem::path& path, std::string& error_m
 }
 
 void Emulator::unload_rom() noexcept {
+    static_cast<void>(flush_save());
+    bus_.backup().configure(SaveType::None);
+    save_path_.clear();
     bus_.clear_game_pak();
     cartridge_.reset();
     bus_.reset();
@@ -87,7 +101,91 @@ void Emulator::run_frame() noexcept {
     }
     if (scheduler_.now() >= frame_end) {
         ++frame_counter_;
+        update_autosave();
     }
+}
+
+void Emulator::set_save_directory(std::optional<std::filesystem::path> directory) {
+    save_directory_ = std::move(directory);
+}
+
+void Emulator::set_battery_saves_enabled(const bool enabled) noexcept {
+    battery_saves_enabled_ = enabled;
+}
+
+void Emulator::load_battery_save() {
+    save_path_.clear();
+    save_error_.clear();
+    observed_save_generation_ = 0;
+    frames_since_save_write_ = 0;
+    if (!cartridge_ || bus_.backup().type() == SaveType::None) {
+        return;
+    }
+    auto file_name = cartridge_->path().filename();
+    file_name.replace_extension(".sav");
+    save_path_ = save_directory_ ? *save_directory_ / file_name
+                                 : cartridge_->path().parent_path() / file_name;
+    if (!battery_saves_enabled_) {
+        return;
+    }
+    if (const auto bytes = read_binary_file(save_path_, kMaximumSaveFileSize)) {
+        if (!bus_.backup().load(*bytes)) {
+            save_error_ = "The save file does not match this game's save type; it was not loaded.";
+        }
+    }
+}
+
+void Emulator::update_autosave() noexcept {
+    auto& backup = bus_.backup();
+    if (backup.write_generation() != observed_save_generation_) {
+        observed_save_generation_ = backup.write_generation();
+        frames_since_save_write_ = 0;
+        return;
+    }
+    if (backup.dirty() && ++frames_since_save_write_ >= kAutosaveDelayFrames) {
+        static_cast<void>(flush_save());
+    }
+}
+
+bool Emulator::flush_save() noexcept {
+    auto& backup = bus_.backup();
+    if (!battery_saves_enabled_ || !backup.dirty() || save_path_.empty()) {
+        return true;
+    }
+    try {
+        if (save_directory_ && !std::filesystem::exists(*save_directory_)) {
+            std::filesystem::create_directories(*save_directory_);
+        }
+    } catch (...) {
+        save_error_ = "Could not create the save folder.";
+        return false;
+    }
+    if (!write_file_atomically(save_path_, backup.data(), save_error_)) {
+        return false;
+    }
+    backup.mark_clean();
+    ++saves_written_;
+    return true;
+}
+
+SaveType Emulator::save_type() const noexcept {
+    return bus_.backup().type();
+}
+
+const std::filesystem::path& Emulator::save_path() const noexcept {
+    return save_path_;
+}
+
+bool Emulator::save_pending() const noexcept {
+    return bus_.backup().dirty();
+}
+
+const std::string& Emulator::save_error() const noexcept {
+    return save_error_;
+}
+
+std::uint64_t Emulator::saves_written() const noexcept {
+    return saves_written_;
 }
 
 std::optional<ExecutionResult> Emulator::step_instruction() noexcept {
@@ -125,6 +223,10 @@ std::optional<ExecutionResult> Emulator::step_instruction() noexcept {
     process_events();
     service_interrupts();
     return result;
+}
+
+void Emulator::take_audio_samples(std::vector<std::int16_t>& destination) {
+    bus_.apu().take_samples(destination);
 }
 
 void Emulator::set_pressed_keys(const std::uint16_t pressed) noexcept {
@@ -244,6 +346,8 @@ void Emulator::reset_machine() noexcept {
     bus_.set_pressed_keys(pressed_keys_);
     scheduler_.reset();
     ppu_.reset(bus_, scheduler_);
+    scheduler_.schedule(EventType::ApuSample, Apu::kCyclesPerSample);
+    scheduler_.schedule(EventType::ApuSequencer, Apu::kCyclesPerSequencerStep);
     halted_ = false;
     fault_.reset();
     clear_framebuffer();
@@ -270,6 +374,16 @@ void Emulator::process_events() noexcept {
                     bus_.on_timer_overflow(static_cast<std::size_t>(event->type) -
                                                static_cast<std::size_t>(EventType::Timer0Overflow),
                                            event->timestamp));
+                break;
+            case EventType::ApuSample:
+                bus_.apu().on_sample(event->timestamp);
+                scheduler_.schedule_at(EventType::ApuSample,
+                                       event->timestamp + Apu::kCyclesPerSample);
+                break;
+            case EventType::ApuSequencer:
+                bus_.apu().on_sequencer_step();
+                scheduler_.schedule_at(EventType::ApuSequencer,
+                                       event->timestamp + Apu::kCyclesPerSequencerStep);
                 break;
             case EventType::Count:
                 break;

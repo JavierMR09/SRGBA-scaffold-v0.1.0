@@ -621,8 +621,23 @@ std::uint32_t HleBios::handle_swi(Arm7Tdmi& cpu, GbaBus& bus) noexcept {
     case 0x18: // Diff16bitUnFilter
         diff_unfilter(memory, r0, r1, true, Destination::Vram);
         break;
+    case 0x19: { // SoundBias: ramp the bias level to 0x200 (r0 != 0) or 0x000
+        const auto bias = memory.read16(GbaBus::kIoStart + 0x088U);
+        memory.write16(GbaBus::kIoStart + 0x088U,
+                       static_cast<std::uint16_t>((bias & ~0x03FEU) | (r0 != 0U ? 0x0200U : 0U)));
+        break;
+    }
+    case 0x1F: { // MidiKey2Freq: sample rate for a MIDI key and fine pitch
+        const auto base_frequency = static_cast<double>(memory.read32(r0 + 4U));
+        const auto semitones = 180.0 - static_cast<double>(r1) - static_cast<double>(r2) / 256.0;
+        cpu.set_register(
+            0, static_cast<std::uint32_t>(base_frequency / std::pow(2.0, semitones / 12.0)));
+        cycles += 100;
+        break;
+    }
     default:
-        // Sound driver, multiboot, and other services arrive with the subsystems they drive.
+        // The BIOS MusicPlayer2000 driver and multiboot services are not emulated; games almost
+        // always link their own copy of the sound driver.
         break;
     }
     return finish();

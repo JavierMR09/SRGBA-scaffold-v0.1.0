@@ -36,6 +36,7 @@ void run_suite(const char* relative_path) {
         SKIP("Set SRGBA_GBA_TESTS_DIR to a jsmolka/gba-tests checkout to run this suite.");
     }
     srgba::core::Emulator emulator;
+    emulator.set_battery_saves_enabled(false); // never write .sav files beside the suite ROMs
     std::string error;
     REQUIRE(emulator.load_rom(directory / relative_path, error));
     for (int frame = 0; frame < 120 && !emulator.fault(); ++frame) {
@@ -67,4 +68,20 @@ TEST_CASE("Public suite: BIOS open bus", "[public-roms][bios]") {
 
 TEST_CASE("Public suite: pipeline and DMA (NES)", "[public-roms][cpu][dma]") {
     run_suite("nes/nes.gba");
+}
+
+TEST_CASE("Public suite: SRAM save chip", "[public-roms][saves]") {
+    run_suite("save/sram.gba");
+}
+
+TEST_CASE("Public suite: 64 KiB flash save chip", "[public-roms][saves]") {
+    run_suite("save/flash64.gba");
+}
+
+TEST_CASE("Public suite: 128 KiB flash save chip", "[public-roms][saves]") {
+    run_suite("save/flash128.gba");
+}
+
+TEST_CASE("Public suite: no save chip", "[public-roms][saves]") {
+    run_suite("save/none.gba");
 }

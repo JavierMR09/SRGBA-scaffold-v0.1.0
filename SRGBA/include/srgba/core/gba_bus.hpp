@@ -1,5 +1,7 @@
 #pragma once
 
+#include "srgba/core/apu.hpp"
+#include "srgba/core/backup.hpp"
 #include "srgba/core/dma.hpp"
 #include "srgba/core/interrupts.hpp"
 #include "srgba/core/scheduler.hpp"
@@ -125,6 +127,15 @@ class GbaBus {
     void set_pressed_keys(std::uint16_t pressed) noexcept;
     [[nodiscard]] std::uint16_t key_input() const noexcept;
 
+    // Cartridge save memory. Its contents survive bus resets, like a battery-backed chip.
+    [[nodiscard]] BackupMemory& backup() noexcept;
+    [[nodiscard]] const BackupMemory& backup() const noexcept;
+    [[nodiscard]] bool is_eeprom_address(std::uint32_t address) const noexcept;
+
+    // Sound.
+    [[nodiscard]] Apu& apu() noexcept;
+    [[nodiscard]] const Apu& apu() const noexcept;
+
     // Timers and DMA.
     [[nodiscard]] Timers& timers() noexcept;
     [[nodiscard]] const Timers& timers() const noexcept;
@@ -206,6 +217,8 @@ class GbaBus {
     Scheduler* scheduler_{&own_scheduler_};
     Timers timers_{};
     DmaController dma_{};
+    BackupMemory backup_{};
+    Apu apu_{};
 };
 
 } // namespace srgba::core
