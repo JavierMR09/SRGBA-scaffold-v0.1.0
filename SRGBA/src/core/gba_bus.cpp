@@ -21,6 +21,8 @@ constexpr std::size_t kInterruptMasterOffset = 0x208U;
 constexpr std::size_t kHaltControlOffset = 0x301U;
 constexpr std::size_t kDmaStart = 0x0B0U;
 constexpr std::size_t kDmaEnd = 0x0E0U;
+constexpr std::size_t kSoundStart = 0x060U;
+constexpr std::size_t kSoundEnd = 0x0B0U;
 constexpr std::size_t kTimerStart = 0x100U;
 constexpr std::size_t kTimerEnd = 0x110U;
 // After the BIOS boot sequence, the last fetched BIOS opcode is "MSR CPSR_fc, r0" (0xE129F000).
@@ -66,6 +68,7 @@ void GbaBus::reset() noexcept {
     affine_reload_.fill(true);
     timers_.reset();
     dma_.reset();
+    apu_.reset();
 }
 
 void GbaBus::initialize_post_bios() noexcept {
@@ -73,8 +76,8 @@ void GbaBus::initialize_post_bios() noexcept {
     // display remains forced blank until a program configures a video mode.
     io_[0x000] = 0x80U; // DISPCNT forced blank
     io_[0x001] = 0x00U;
-    io_[0x088] = 0x00U; // SOUNDBIAS = 0x0200
-    io_[0x089] = 0x02U;
+    apu_.write(0x088U - kSoundStart, 0x00U); // SOUNDBIAS = 0x0200
+    apu_.write(0x089U - kSoundStart, 0x02U);
     io_[0x300] = 0x01U; // POSTFLG
     io_[0x020] = 0x00U; // BG2PA = 0x0100
     io_[0x021] = 0x01U;
@@ -233,6 +236,17 @@ std::uint8_t* GbaBus::fast_write_pointer(const std::uint32_t aligned_address) no
 
 BusReadResult GbaBus::read16(const std::uint32_t address, const BusAccess access) noexcept {
     const auto aligned_address = address & ~1U;
+    if (is_eeprom_address(address)) {
+        const auto bit = backup_.eeprom_read();
+        latch_bus_value(bit, 2U);
+        return {bit, fetch_cycles(address, 2U, access)};
+    }
+    if (region_for(address) == Region::Sram) {
+        // The save chip sits on an 8-bit bus: wider reads repeat the addressed byte.
+        const auto value = static_cast<std::uint32_t>(backup_.read8(address)) * 0x0101U;
+        latch_bus_value(value, 2U);
+        return {value, access_cycles(address, 2U, access.sequence)};
+    }
     if (const auto* memory = fast_read_pointer(aligned_address, 2U)) {
         auto halfword = static_cast<std::uint16_t>(memory[0] | (memory[1] << 8U));
         if ((address & 1U) != 0U) {
@@ -264,6 +278,11 @@ BusReadResult GbaBus::read16(const std::uint32_t address, const BusAccess access
 
 BusReadResult GbaBus::read32(const std::uint32_t address, const BusAccess access) noexcept {
     const auto aligned_address = address & ~3U;
+    if (region_for(address) == Region::Sram) {
+        const auto value = replicate_byte(backup_.read8(address));
+        latch_bus_value(value, 4U);
+        return {value, access_cycles(address, 4U, access.sequence)};
+    }
     if (const auto* memory = fast_read_pointer(aligned_address, 4U)) {
         const auto word = static_cast<std::uint32_t>(memory[0]) |
                           (static_cast<std::uint32_t>(memory[1]) << 8U) |
@@ -306,6 +325,17 @@ BusWriteResult GbaBus::write8(const std::uint32_t address, const std::uint8_t va
 BusWriteResult GbaBus::write16(const std::uint32_t address, const std::uint16_t value,
                                const BusAccess access) noexcept {
     const auto aligned_address = address & ~1U;
+    if (is_eeprom_address(address)) {
+        backup_.eeprom_write(value);
+        latch_bus_value(value, 2U);
+        return {access_cycles(address, 2U, access.sequence)};
+    }
+    if (region_for(address) == Region::Sram) {
+        // Only the byte lane selected by the address reaches the 8-bit save chip.
+        backup_.write8(address, static_cast<std::uint8_t>(value >> ((address & 1U) * 8U)));
+        latch_bus_value(value, 2U);
+        return {access_cycles(address, 2U, access.sequence)};
+    }
     if (auto* memory = fast_write_pointer(aligned_address)) {
         memory[0] = static_cast<std::uint8_t>(value);
         memory[1] = static_cast<std::uint8_t>(value >> 8U);
@@ -321,6 +351,11 @@ BusWriteResult GbaBus::write16(const std::uint32_t address, const std::uint16_t 
 BusWriteResult GbaBus::write32(const std::uint32_t address, const std::uint32_t value,
                                const BusAccess access) noexcept {
     const auto aligned_address = address & ~3U;
+    if (region_for(address) == Region::Sram) {
+        backup_.write8(address, static_cast<std::uint8_t>(value >> ((address & 3U) * 8U)));
+        latch_bus_value(value, 4U);
+        return {access_cycles(address, 4U, access.sequence)};
+    }
     if (auto* memory = fast_write_pointer(aligned_address)) {
         for (std::size_t index = 0; index < 4U; ++index) {
             memory[index] = byte_at(value, index);
@@ -369,7 +404,24 @@ DmaController& GbaBus::dma() noexcept {
 
 std::uint8_t GbaBus::on_timer_overflow(const std::size_t index,
                                        const std::uint64_t timestamp) noexcept {
-    return timers_.on_overflow(index, timestamp, *scheduler_, *this);
+    const auto overflowed = timers_.on_overflow(index, timestamp, *scheduler_, *this);
+    // Timers 0 and 1 clock the Direct Sound FIFOs, which request DMA when half empty.
+    const auto refill = apu_.on_timer_overflow(overflowed, timestamp);
+    if ((refill & Apu::kFifoA) != 0U) {
+        dma_.request_sound_fifo(0x040000A0U, *this);
+    }
+    if ((refill & Apu::kFifoB) != 0U) {
+        dma_.request_sound_fifo(0x040000A4U, *this);
+    }
+    return overflowed;
+}
+
+Apu& GbaBus::apu() noexcept {
+    return apu_;
+}
+
+const Apu& GbaBus::apu() const noexcept {
+    return apu_;
 }
 
 void GbaBus::trigger_dma(const DmaTiming timing) noexcept {
@@ -384,6 +436,23 @@ bool GbaBus::take_affine_reload(const std::size_t background) noexcept {
     const bool reload = affine_reload_[background];
     affine_reload_[background] = false;
     return reload;
+}
+
+BackupMemory& GbaBus::backup() noexcept {
+    return backup_;
+}
+
+const BackupMemory& GbaBus::backup() const noexcept {
+    return backup_;
+}
+
+bool GbaBus::is_eeprom_address(const std::uint32_t address) const noexcept {
+    if ((address >> 24U) != 0x0DU || !backup_.is_eeprom()) {
+        return false;
+    }
+    // Cartridges up to 16 MiB expose the EEPROM across the whole 0x0D region; 32 MiB carts only
+    // in the last 256 bytes.
+    return game_pak_.size() <= 16U * 1024U * 1024U || (address & 0x00FFFF00U) == 0x00FFFF00U;
 }
 
 bool GbaBus::using_builtin_bios() const noexcept {
@@ -570,6 +639,9 @@ std::uint8_t GbaBus::read_byte(const std::uint32_t address, const BusAccess& acc
         if (offset == 0x205U) {
             return static_cast<std::uint8_t>(wait_control_ >> 8U);
         }
+        if (offset >= kSoundStart && offset < kSoundEnd) {
+            return apu_.read(static_cast<std::uint32_t>(offset - kSoundStart));
+        }
         if (offset >= kTimerStart && offset < kTimerEnd) {
             return timers_.read(static_cast<std::uint32_t>(offset - kTimerStart),
                                 scheduler_->now());
@@ -601,19 +673,18 @@ std::uint8_t GbaBus::read_byte(const std::uint32_t address, const BusAccess& acc
     case Region::GamePak1:
     case Region::GamePak2: {
         const auto offset = static_cast<std::size_t>(address & kGamePakWindowMask);
-        if (!game_pak_.empty()) {
-            if (offset < game_pak_.size()) {
-                return game_pak_[offset];
-            }
-            mapped = false;
-            return 0;
+        if (offset < game_pak_.size()) {
+            return game_pak_[offset];
         }
+        // Past the end of the ROM (or with no cartridge) the shared address/data lines read
+        // back the lower 16 bits of the halfword address.
         const auto halfword = static_cast<std::uint16_t>((address >> 1U) & 0xFFFFU);
         return (address & 1U) == 0U ? static_cast<std::uint8_t>(halfword)
                                     : static_cast<std::uint8_t>(halfword >> 8U);
     }
 
     case Region::Sram:
+        return backup_.read8(address);
     case Region::Unmapped:
         mapped = false;
         return 0;
@@ -655,6 +726,10 @@ void GbaBus::write_byte(const std::uint32_t address, const std::uint8_t value,
             wait_control_ = static_cast<std::uint16_t>((wait_control_ & 0x00FFU) |
                                                        (static_cast<std::uint16_t>(value) << 8U));
             wait_control_ &= kWaitControlWritableMask;
+            return;
+        }
+        if (offset >= kSoundStart && offset < kSoundEnd) {
+            apu_.write(static_cast<std::uint32_t>(offset - kSoundStart), value);
             return;
         }
         if (offset >= kTimerStart && offset < kTimerEnd) {
@@ -754,10 +829,12 @@ void GbaBus::write_byte(const std::uint32_t address, const std::uint8_t value,
         }
         return;
 
+    case Region::Sram:
+        backup_.write8(address, value);
+        return;
     case Region::GamePak0:
     case Region::GamePak1:
     case Region::GamePak2:
-    case Region::Sram:
     case Region::Unmapped:
         return;
     }

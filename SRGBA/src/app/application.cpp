@@ -171,11 +171,70 @@ bool Application::initialize() {
     }
     imgui_renderer_initialized_ = true;
 
+    initialize_audio();
     return true;
+}
+
+void Application::initialize_audio() noexcept {
+    // SDL converts the GBA's 32,768 Hz stereo stream to the output device's format and rate.
+    const SDL_AudioSpec spec{SDL_AUDIO_S16, 2, static_cast<int>(core::Apu::kSampleRate)};
+    audio_stream_ =
+        SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (!audio_stream_) {
+        SDL_Log("Audio output is unavailable: %s", SDL_GetError());
+        return;
+    }
+    apply_audio_gain();
+    SDL_ResumeAudioStreamDevice(audio_stream_);
+}
+
+void Application::apply_audio_gain() const noexcept {
+    if (audio_stream_) {
+        const auto gain =
+            settings_.audio_muted ? 0.0F : static_cast<float>(settings_.audio_volume) / 100.0F;
+        SDL_SetAudioStreamGain(audio_stream_, gain);
+    }
+}
+
+void Application::update_audio(const bool playing) {
+    audio_buffer_.clear();
+    emulator_.take_audio_samples(audio_buffer_);
+    if (!audio_stream_) {
+        return;
+    }
+    if (!playing) {
+        SDL_ClearAudioStream(audio_stream_);
+        return;
+    }
+    // Keep latency bounded: if the device fell behind (for example while the window was being
+    // dragged), drop this batch instead of letting the queue grow.
+    constexpr int kBytesPerFrame = 4; // stereo int16
+    constexpr int kMaximumQueuedBytes =
+        static_cast<int>(core::Apu::kSampleRate) / 8 * kBytesPerFrame;
+    if (SDL_GetAudioStreamQueued(audio_stream_) > kMaximumQueuedBytes || audio_buffer_.empty()) {
+        return;
+    }
+    SDL_PutAudioStreamData(audio_stream_, audio_buffer_.data(),
+                           static_cast<int>(audio_buffer_.size() * sizeof(std::int16_t)));
+}
+
+void Application::update_save_status() {
+    if (emulator_.saves_written() != observed_saves_written_) {
+        observed_saves_written_ = emulator_.saves_written();
+        save_notice_until_ns_ = SDL_GetTicksNS() + 2000000000ULL;
+    }
+    if (!emulator_.save_error().empty() && !status_is_error_) {
+        status_message_ = emulator_.save_error();
+        status_is_error_ = true;
+    }
 }
 
 void Application::shutdown() noexcept {
     input_.close_all();
+    if (audio_stream_) {
+        SDL_DestroyAudioStream(audio_stream_);
+        audio_stream_ = nullptr;
+    }
     if (imgui_renderer_initialized_) {
         ImGui_ImplSDLRenderer3_Shutdown();
         imgui_renderer_initialized_ = false;
@@ -232,6 +291,9 @@ void Application::process_events() {
             request_open_rom();
         } else if (event.key.key == SDLK_SPACE && emulator_.has_rom()) {
             emulator_.set_paused(!emulator_.is_paused());
+        } else if (event.key.key == SDLK_M) {
+            settings_.audio_muted = !settings_.audio_muted;
+            apply_audio_gain();
         } else if (event.key.key == SDLK_F11) {
             const auto current = SDL_GetWindowFlags(window_);
             const bool is_fullscreen = (current & SDL_WINDOW_FULLSCREEN) != 0;
@@ -296,6 +358,9 @@ void Application::update() {
         produced_frame = true;
         ++frames_this_window_;
     }
+
+    update_audio(playing);
+    update_save_status();
 
     // Emulated frames per second, refreshed twice a second.
     if (now - fps_window_start_ns_ >= 500000000ULL) {
@@ -384,6 +449,10 @@ void Application::draw_menu_bar() {
         if (ImGui::MenuItem(pause_label, "Space", false, emulator_.has_rom())) {
             emulator_.set_paused(!emulator_.is_paused());
         }
+        if (ImGui::MenuItem("Mute audio", "M", settings_.audio_muted)) {
+            settings_.audio_muted = !settings_.audio_muted;
+            apply_audio_gain();
+        }
         if (ImGui::MenuItem("Reset", nullptr, false, emulator_.has_rom())) {
             emulator_.reset();
             status_message_ = emulator_.booting_through_bios() ? "ROM reset through BIOS"
@@ -443,13 +512,12 @@ void Application::draw_landing_page() {
     ImGui::SetWindowFontScale(2.2F);
     ImGui::TextUnformatted("SRGBA");
     ImGui::SetWindowFontScale(1.0F);
-    ImGui::TextDisabled("Game Boy Advance emulator %s - M4 graphics, DMA, and timers", kVersion);
+    ImGui::TextDisabled("Game Boy Advance emulator %s - M5 sound and saves", kVersion);
     ImGui::Spacing();
     ImGui::TextWrapped(
-        "Open a legally obtained .gba ROM, or try the demos in the samples folder. This build "
-        "emulates the CPU, every video mode with sprites and effects, DMA, timers, interrupts, "
-        "and input. Sound and battery saves arrive in the next milestone, so games run silently "
-        "and cannot save yet.");
+        "Open a legally obtained .gba ROM, or try the demos in the samples folder. SRGBA "
+        "emulates the CPU, graphics, sound, DMA, timers, and input, and keeps battery saves in "
+        ".sav files next to your ROMs. Save states, fast-forward, and cheats arrive next.");
     ImGui::Spacing();
 
     if (ImGui::Button("Open GBA ROM", ImVec2(190.0F, 42.0F))) {
@@ -513,6 +581,12 @@ void Application::draw_game_view() {
                         emulator_.is_halted() ? " (halted)" : "");
     if (emulator_.fault()) {
         ImGui::TextColored(ImVec4(1.0F, 0.38F, 0.36F, 1.0F), "%s", status_message_.c_str());
+    } else if (!emulator_.save_error().empty()) {
+        ImGui::TextColored(ImVec4(1.0F, 0.38F, 0.36F, 1.0F), "Save error: %s",
+                           emulator_.save_error().c_str());
+    } else if (SDL_GetTicksNS() < save_notice_until_ns_) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.30F, 0.88F, 0.58F, 1.0F), "  Game saved");
     }
 
     const auto available = ImGui::GetContentRegionAvail();
@@ -583,6 +657,30 @@ void Application::draw_settings_window() {
     }
 
     ImGui::Spacing();
+    ImGui::SeparatorText("Audio");
+    if (!audio_stream_) {
+        ImGui::TextDisabled("No audio output device is available.");
+    }
+    if (ImGui::SliderInt("Volume", &settings_.audio_volume, 0, 100, "%d%%")) {
+        apply_audio_gain();
+    }
+    if (ImGui::Checkbox("Mute", &settings_.audio_muted)) {
+        apply_audio_gain();
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Saves");
+    if (emulator_.has_rom()) {
+        const auto type = core::save_type_name(emulator_.save_type());
+        ImGui::TextDisabled("Save chip: %.*s", static_cast<int>(type.size()), type.data());
+        if (!emulator_.save_path().empty()) {
+            ImGui::TextWrapped("Save file: %s", emulator_.save_path().string().c_str());
+        }
+    } else {
+        ImGui::TextDisabled("Battery saves are stored as .sav files next to each ROM.");
+    }
+
+    ImGui::Spacing();
     ImGui::SeparatorText("Controls");
     if (ImGui::BeginTable("Controls", 3,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
@@ -607,6 +705,7 @@ void Application::draw_settings_window() {
     ImGui::Spacing();
     ImGui::BulletText("Ctrl+O: Open ROM");
     ImGui::BulletText("Space: Pause or resume");
+    ImGui::BulletText("M: Mute or unmute audio");
     ImGui::BulletText("F11: Toggle fullscreen");
 
     ImGui::End();
@@ -625,7 +724,7 @@ void Application::draw_about_window() {
     ImGui::TextWrapped(
         "A clean-room Game Boy Advance emulator project built with C++20, SDL3, and Dear ImGui.");
     ImGui::Spacing();
-    ImGui::TextDisabled("Current status: M4 graphics, DMA, and timers");
+    ImGui::TextDisabled("Current status: M5 sound and battery saves");
     ImGui::TextDisabled("License: MIT");
     ImGui::Spacing();
     ImGui::TextWrapped("SRGBA does not include commercial ROMs or Nintendo BIOS files.");

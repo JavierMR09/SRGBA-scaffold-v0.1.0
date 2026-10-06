@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 struct SDL_Renderer;
 struct SDL_Texture;
@@ -61,6 +62,10 @@ class Application {
     void load_bios(const std::filesystem::path& path);
     void close_rom();
     void apply_scale_filter() const noexcept;
+    void initialize_audio() noexcept;
+    void update_audio(bool playing);
+    void apply_audio_gain() const noexcept;
+    void update_save_status();
     void save_settings() noexcept;
 
     static void SDLCALL file_dialog_callback(void* userdata, const char* const* file_list,
@@ -69,6 +74,10 @@ class Application {
     SDL_Window* window_{};
     SDL_Renderer* renderer_{};
     SDL_Texture* framebuffer_texture_{};
+    SDL_AudioStream* audio_stream_{};
+    std::vector<std::int16_t> audio_buffer_;
+    std::uint64_t observed_saves_written_{};
+    std::uint64_t save_notice_until_ns_{};
     core::Emulator emulator_;
     InputMapper input_;
     Settings settings_;

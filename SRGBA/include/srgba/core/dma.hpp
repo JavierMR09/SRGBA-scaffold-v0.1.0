@@ -29,8 +29,11 @@ class DmaController {
 
     // Starts every enabled channel waiting for `timing`, in priority order (DMA0 first).
     void trigger(DmaTiming timing, GbaBus& bus) noexcept;
-    // Starts one channel if it is enabled and waiting for `timing` (used by the sound FIFOs).
+    // Starts one channel if it is enabled and waiting for `timing`.
     void trigger_channel(std::size_t channel, DmaTiming timing, GbaBus& bus) noexcept;
+    // Refills a Direct Sound FIFO: runs DMA1 or DMA2 when it is set to "special" timing and
+    // targets `fifo_address` (0x040000A0 or 0x040000A4).
+    void request_sound_fifo(std::uint32_t fifo_address, GbaBus& bus) noexcept;
 
     [[nodiscard]] std::uint32_t take_stall_cycles() noexcept;
     [[nodiscard]] bool enabled(std::size_t channel) const noexcept;

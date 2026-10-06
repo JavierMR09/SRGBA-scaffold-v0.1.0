@@ -57,15 +57,20 @@
 Deferred: per-line sprite rendering cycle limits, DMA3 video-capture mode, and cycle-exact BIOS
 call timing (the HLE BIOS returns correct results but not Nintendo's exact cycle counts).
 
-## M5 - Audio and cartridge persistence (next)
+## M5 - Audio and cartridge persistence (complete)
 
-- [ ] PSG square, wave, and noise channels
-- [ ] Direct Sound FIFOs and DMA integration
-- [ ] SDL audio queue and resampling
-- [ ] SRAM, Flash, and EEPROM save media
-- [ ] Automatic, atomic battery saves
+- [x] PSG square, wave, and noise channels
+- [x] Direct Sound FIFOs and DMA integration
+- [x] SDL audio queue and resampling
+- [x] SRAM, Flash, and EEPROM save media
+- [x] Automatic, atomic battery saves
+- [x] Public save-chip suites (SRAM, Flash 64K/128K, none) in CI
+- [x] HLE MidiKey2Freq and SoundBias BIOS calls; demo sound effects
 
-## M6 - Emulator features
+Deferred: the BIOS MusicPlayer2000 sound-driver calls (games normally link their own driver),
+Atmel flash page writes, and real-time-clock cartridges.
+
+## M6 - Emulator features (next)
 
 - [ ] Versioned save states and quick slots
 - [ ] Fast-forward, frame advance, and rewind groundwork

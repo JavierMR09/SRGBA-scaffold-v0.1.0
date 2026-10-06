@@ -130,6 +130,16 @@ void DmaController::trigger_channel(const std::size_t index, const DmaTiming tim
     }
 }
 
+void DmaController::request_sound_fifo(const std::uint32_t fifo_address, GbaBus& bus) noexcept {
+    for (std::size_t index = 1; index <= 2U; ++index) {
+        if (enabled(index) && timing(index) == DmaTiming::Special &&
+            channels_[index].internal_destination == fifo_address) {
+            run(index, bus);
+            return;
+        }
+    }
+}
+
 std::uint32_t DmaController::take_stall_cycles() noexcept {
     const auto cycles = stall_cycles_;
     stall_cycles_ = 0;
@@ -146,9 +156,14 @@ DmaTiming DmaController::timing(const std::size_t channel) const noexcept {
 
 void DmaController::run(const std::size_t index, GbaBus& bus) noexcept {
     auto& channel = channels_[index];
-    const bool words = (channel.control & kWordTransfer) != 0U;
+    // Sound FIFO mode always moves four words to a fixed address, ignoring count and width.
+    const bool sound_fifo = timing(index) == DmaTiming::Special && (index == 1U || index == 2U);
+    const bool words = sound_fifo || (channel.control & kWordTransfer) != 0U;
     const std::uint32_t width = words ? 4U : 2U;
-    const auto destination_control = static_cast<AddressControl>((channel.control >> 5U) & 0x3U);
+    const auto destination_control =
+        sound_fifo ? AddressControl::Fixed
+                   : static_cast<AddressControl>((channel.control >> 5U) & 0x3U);
+    const auto units = sound_fifo ? 4U : channel.internal_count;
     auto source_control = static_cast<AddressControl>((channel.control >> 7U) & 0x3U);
     if (source_control == AddressControl::IncrementReload || in_game_pak(channel.internal_source)) {
         // Mode 3 is prohibited for sources, and the cartridge bus can only count upwards.
@@ -157,10 +172,15 @@ void DmaController::run(const std::size_t index, GbaBus& bus) noexcept {
     const auto source_step = step(source_control, width);
     const auto destination_step = step(destination_control, width);
 
+    // EEPROM commands are sent by DMA; their length reveals the chip's address width.
+    if (bus.is_eeprom_address(channel.internal_destination)) {
+        bus.backup().prepare_eeprom_transfer(channel.internal_count);
+    }
+
     auto source = channel.internal_source;
     auto destination = channel.internal_destination;
     std::uint32_t cycles = 2; // DMA start-up
-    for (std::uint32_t unit = 0; unit < channel.internal_count; ++unit) {
+    for (std::uint32_t unit = 0; unit < units; ++unit) {
         const BusAccess access{unit == 0U ? AccessSequence::NonSequential
                                           : AccessSequence::Sequential,
                                AccessKind::Data, 0xFFFFFFFFU};

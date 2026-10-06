@@ -3,10 +3,10 @@
 SRGBA is a clean-room Game Boy Advance emulator project written in C++20. The initial target is
 Windows 10/11 x64, with a platform-independent emulation core and an SDL3 desktop frontend.
 
-> **Project status:** M4 graphics, DMA, and timers. SRGBA emulates the ARM7TDMI (passing the
-> public ARM, Thumb, memory, BIOS, and pipeline test suites), every video mode with sprites,
-> windows, blending, and mosaic, four DMA channels, and four timers, with no BIOS dump required.
-> Sound and battery saves arrive in M5, so games run silently and cannot save yet.
+> **Project status:** M5 sound and battery saves. SRGBA emulates the ARM7TDMI (passing the public
+> ARM, Thumb, memory, BIOS, pipeline, and save-chip test suites), every video mode with sprites and
+> effects, DMA, timers, all six sound channels, and SRAM/Flash/EEPROM saves, with no BIOS dump
+> required. Save states, fast-forward, and cheats arrive in M6.
 
 ## Try it
 
@@ -16,8 +16,13 @@ Download the latest `SRGBA-windows-x64` ZIP, extract it anywhere, and run `SRGBA
 - `SRGBA-demo.gba`: move the square with the arrow keys (or a controller's D-pad) and hold **X**
   (GBA A) to change its color.
 - `SRGBA-tiles-demo.gba`: a scrolling tile background, a ball sprite with a see-through shadow,
-  and a highlight band that sweeps across the screen. It exercises DMA, timers, tile graphics,
-  sprites, windows, and blending together.
+  and a highlight band that sweeps across the screen. Press **X** (GBA A) for a chirp and **Z**
+  (GBA B) for a noise burst. It exercises DMA, timers, tile graphics, sprites, windows, blending,
+  and sound together.
+
+Game progress is saved automatically to a `.sav` file next to the ROM (the same format other
+emulators use, so saves can move between them). Press **M** to mute; volume is in **View >
+Settings**.
 
 | GBA      | Keyboard                 | Controller                     |
 |----------|--------------------------|--------------------------------|
@@ -71,6 +76,12 @@ Download the latest `SRGBA-windows-x64` ZIP, extract it anywhere, and run `SRGBA
 - Four DMA channels (immediate, VBlank, HBlank, repeat, address modes, IRQs) with CPU stall timing
 - Four hardware timers with prescalers, cascading, and interrupts
 - Public CPU test suites (jsmolka/gba-tests) run in CI
+- Sound: two square channels (with sweep), the wave channel (both banks), noise, and the two
+  Direct Sound FIFOs fed by timers and DMA, mixed to 32,768 Hz stereo and played through SDL
+- Save chips detected from the cartridge's SDK tag: 32 KiB SRAM, 64/128 KiB Flash (IDs, erase,
+  program, bank switching), and 512 B/8 KiB EEPROM over DMA
+- Automatic battery saves: written half a second after the game stops writing, on ROM close, and
+  on exit, through a temporary file and rename so a crash never corrupts a save
 - Isolated, testable `srgba_core` library
 - Automated core tests on Linux and full application builds on Windows
 - GitHub Actions release ZIP generation
