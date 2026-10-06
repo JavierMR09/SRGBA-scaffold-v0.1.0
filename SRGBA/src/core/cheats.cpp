@@ -672,7 +672,7 @@ std::string_view cheat_format_name(const CheatFormat format) noexcept {
     case CheatFormat::CodeBreaker:
         return "CodeBreaker";
     case CheatFormat::GameShark:
-        return "GameShark / Action Replay v1-v2";
+        return "GameShark / AR v1-v2";
     case CheatFormat::ActionReplayV3:
         return "Action Replay v3";
     }

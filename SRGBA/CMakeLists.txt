@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.28)
 
 project(
     SRGBA
-    VERSION 0.6.0
+    VERSION 0.7.0
     DESCRIPTION "A clean-room Game Boy Advance emulator"
     LANGUAGES CXX
 )
@@ -75,7 +75,9 @@ if(SRGBA_BUILD_APP)
     add_executable(
         srgba_app WIN32
         src/app/application.cpp
+        src/app/application_panels.cpp
         src/app/input.cpp
+        src/app/library.cpp
         src/app/main.cpp
         src/app/settings.cpp
     )

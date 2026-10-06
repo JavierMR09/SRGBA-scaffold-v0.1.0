@@ -49,6 +49,7 @@ function(srgba_fetch_frontend_dependencies)
             "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
             "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
             "${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp"
+            "${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp"
         )
         target_compile_features(srgba_imgui PUBLIC cxx_std_20)
         target_include_directories(
@@ -56,6 +57,7 @@ function(srgba_fetch_frontend_dependencies)
             PUBLIC
                 "${imgui_SOURCE_DIR}"
                 "${imgui_SOURCE_DIR}/backends"
+                "${imgui_SOURCE_DIR}/misc/cpp"
         )
         target_link_libraries(srgba_imgui PUBLIC SDL3::SDL3)
         if(MSVC)
