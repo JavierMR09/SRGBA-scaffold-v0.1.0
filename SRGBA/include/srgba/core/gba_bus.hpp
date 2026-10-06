@@ -107,6 +107,14 @@ class GbaBus {
     [[nodiscard]] BusWriteResult write32(std::uint32_t address, std::uint32_t value,
                                          BusAccess access = {}) noexcept;
 
+    // Side-effect-free access for cheats and tools: no wait states, open-bus latching, or
+    // save-chip protocol. `width` is 1, 2 or 4 and the address is aligned down to it. Reads see
+    // memory, IO registers (raw), and the ROM; other space reads as zero. Writes reach work RAM,
+    // palette, VRAM and OAM directly and IO through the register logic; ROM, BIOS and save
+    // memory ignore them.
+    [[nodiscard]] std::uint32_t peek(std::uint32_t address, std::size_t width) const noexcept;
+    void poke(std::uint32_t address, std::uint32_t value, std::size_t width) noexcept;
+
     [[nodiscard]] std::uint16_t wait_control() const noexcept;
     [[nodiscard]] bool game_pak_prefetch_enabled() const noexcept;
     [[nodiscard]] std::uint8_t post_boot_flag() const noexcept;

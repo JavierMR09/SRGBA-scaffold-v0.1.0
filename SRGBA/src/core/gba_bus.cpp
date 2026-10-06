@@ -373,6 +373,42 @@ BusWriteResult GbaBus::write32(const std::uint32_t address, const std::uint32_t 
     return {access_cycles(address, 4U, access.sequence)};
 }
 
+std::uint32_t GbaBus::peek(const std::uint32_t address, const std::size_t width) const noexcept {
+    const auto aligned_address = address & ~static_cast<std::uint32_t>(width - 1U);
+    const std::uint8_t* memory = fast_read_pointer(aligned_address, width);
+    if (memory == nullptr && region_for(aligned_address) == Region::Io) {
+        const auto offset = static_cast<std::size_t>(aligned_address - kIoStart);
+        if (offset + width <= kIoSize) {
+            memory = &io_[offset];
+        }
+    }
+    if (memory == nullptr) {
+        return 0;
+    }
+    std::uint32_t value = 0;
+    for (std::size_t index = 0; index < width; ++index) {
+        value |= static_cast<std::uint32_t>(memory[index]) << (index * 8U);
+    }
+    return value;
+}
+
+void GbaBus::poke(const std::uint32_t address, const std::uint32_t value,
+                  const std::size_t width) noexcept {
+    const auto aligned_address = address & ~static_cast<std::uint32_t>(width - 1U);
+    if (auto* memory = fast_write_pointer(aligned_address)) {
+        for (std::size_t index = 0; index < width; ++index) {
+            memory[index] = byte_at(value, index);
+        }
+        return;
+    }
+    if (region_for(aligned_address) == Region::Io) {
+        for (std::size_t index = 0; index < width; ++index) {
+            write_byte(aligned_address + static_cast<std::uint32_t>(index), byte_at(value, index),
+                       width);
+        }
+    }
+}
+
 std::uint16_t GbaBus::wait_control() const noexcept {
     return wait_control_;
 }

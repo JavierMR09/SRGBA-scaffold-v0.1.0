@@ -2,6 +2,7 @@
 
 #include "srgba/core/arm7tdmi.hpp"
 #include "srgba/core/cartridge.hpp"
+#include "srgba/core/cheats.hpp"
 #include "srgba/core/framebuffer.hpp"
 #include "srgba/core/gba_bus.hpp"
 #include "srgba/core/ppu.hpp"
@@ -77,6 +78,16 @@ class Emulator {
     bool rewind_step();
     [[nodiscard]] std::size_t rewind_depth() const noexcept;
     [[nodiscard]] std::size_t rewind_memory_used() const noexcept;
+    // Cheats for the loaded game, read from "<rom name>.cht" beside the battery save when the
+    // game loads. Enabled cheats run at the start of every frame; ROM patches follow the list
+    // automatically. Call save_cheats() after changing the list to keep it.
+    [[nodiscard]] CheatEngine& cheats() noexcept;
+    [[nodiscard]] const CheatEngine& cheats() const noexcept;
+    [[nodiscard]] std::filesystem::path cheat_file_path() const;
+    bool save_cheats(std::string& error_message);
+    // Problems found while reading the cheat file (empty when it loaded cleanly or was absent).
+    [[nodiscard]] const std::string& cheat_file_message() const noexcept;
+
     // Increments each time save data reaches the disk (lets the frontend show a notice).
     [[nodiscard]] std::uint64_t saves_written() const noexcept;
 
@@ -126,6 +137,8 @@ class Emulator {
     [[nodiscard]] bool deserialize(std::span<const std::uint8_t> data, std::string& error_message);
     [[nodiscard]] std::filesystem::path game_file_path(std::string_view extension) const;
     void load_battery_save();
+    void load_cheats();
+    void sync_rom_patches();
     void update_autosave() noexcept;
     void process_events() noexcept;
     void service_interrupts() noexcept;
@@ -154,6 +167,16 @@ class Emulator {
     std::uint32_t frames_since_save_write_{};
     std::uint64_t saves_written_{};
     std::string save_error_;
+
+    struct AppliedRomPatch {
+        std::size_t offset{};
+        std::uint16_t original{};
+    };
+    CheatEngine cheats_{};
+    std::string cheat_file_message_;
+    std::vector<AppliedRomPatch> applied_rom_patches_;
+    std::uint64_t synced_cheat_revision_{};
+    bool rom_patches_stale_{true};
 
     std::uint32_t rom_crc32_{};
     RewindBuffer rewind_{};

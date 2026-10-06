@@ -21,6 +21,7 @@ constexpr std::size_t kMaximumSaveFileSize = 256U * 1024U;
 constexpr std::size_t kMaximumStateFileSize = 4U * 1024U * 1024U;
 constexpr std::array<std::uint8_t, 8> kStateMagic{'S', 'R', 'G', 'B', 'A', 'S', 'T', 'A'};
 constexpr std::uint64_t kRewindIntervalFrames = 2;
+constexpr std::size_t kMaximumCheatFileSize = 1024U * 1024U;
 static_assert(kMasterCyclesPerFrame == 280896U);
 
 } // namespace
@@ -38,11 +39,13 @@ bool Emulator::load_rom(const std::filesystem::path& path, std::string& error_me
     try {
         auto cartridge = Cartridge::load(path);
         static_cast<void>(flush_save()); // keep the previous game's progress
+        applied_rom_patches_.clear();    // they belonged to the previous cartridge
         cartridge_ = std::move(cartridge);
         rom_crc32_ = crc32(cartridge_->bytes());
         bus_.set_game_pak(cartridge_->bytes());
         bus_.backup().configure(detect_save_type(cartridge_->bytes()));
         load_battery_save();
+        load_cheats();
         reset_machine();
         error_message.clear();
         return true;
@@ -68,6 +71,10 @@ void Emulator::unload_rom() noexcept {
     save_path_.clear();
     rewind_.clear();
     rom_crc32_ = 0;
+    cheats_.clear();
+    cheat_file_message_.clear();
+    applied_rom_patches_.clear();
+    rom_patches_stale_ = true;
     bus_.clear_game_pak();
     cartridge_.reset();
     bus_.reset();
@@ -99,6 +106,13 @@ void Emulator::reset() noexcept {
 void Emulator::run_frame() noexcept {
     if (state_ != RunState::Running) {
         return;
+    }
+
+    if (rom_patches_stale_ || cheats_.revision() != synced_cheat_revision_) {
+        sync_rom_patches();
+    }
+    if (cheats_.any_enabled()) {
+        cheats_.apply(bus_, pressed_keys_);
     }
 
     // Frames are aligned to the PPU: line 0 starts at every multiple of 280,896 cycles.
@@ -249,6 +263,81 @@ bool Emulator::save_state_slot(const int slot, std::string& error_message) {
         std::filesystem::create_directories(*save_directory_, error);
     }
     return write_file_atomically(path, save_state(), error_message);
+}
+
+CheatEngine& Emulator::cheats() noexcept {
+    return cheats_;
+}
+
+const CheatEngine& Emulator::cheats() const noexcept {
+    return cheats_;
+}
+
+std::filesystem::path Emulator::cheat_file_path() const {
+    return game_file_path(".cht");
+}
+
+bool Emulator::save_cheats(std::string& error_message) {
+    const auto path = cheat_file_path();
+    if (path.empty()) {
+        error_message = "Load a game before saving cheats.";
+        return false;
+    }
+    if (cheats_.empty()) {
+        std::error_code error;
+        std::filesystem::remove(path, error);
+        error_message.clear();
+        return true;
+    }
+    if (save_directory_) {
+        std::error_code error;
+        std::filesystem::create_directories(*save_directory_, error);
+    }
+    const auto text = cheats_.to_text();
+    return write_file_atomically(
+        path, std::span(reinterpret_cast<const std::uint8_t*>(text.data()), text.size()),
+        error_message);
+}
+
+const std::string& Emulator::cheat_file_message() const noexcept {
+    return cheat_file_message_;
+}
+
+void Emulator::load_cheats() {
+    cheats_.clear();
+    cheat_file_message_.clear();
+    rom_patches_stale_ = true;
+    const auto bytes = read_binary_file(cheat_file_path(), kMaximumCheatFileSize);
+    if (!bytes) {
+        return;
+    }
+    const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+    if (!cheats_.load_text(text, cheat_file_message_)) {
+        cheat_file_message_ =
+            "Ignored " + cheat_file_path().filename().string() + ": " + cheat_file_message_;
+    }
+}
+
+void Emulator::sync_rom_patches() {
+    rom_patches_stale_ = false;
+    synced_cheat_revision_ = cheats_.revision();
+    if (!cartridge_) {
+        applied_rom_patches_.clear();
+        return;
+    }
+    // Restore in reverse so overlapping patches unwind to the original bytes.
+    for (auto patch = applied_rom_patches_.rbegin(); patch != applied_rom_patches_.rend();
+         ++patch) {
+        static_cast<void>(cartridge_->patch16(patch->offset, patch->original));
+    }
+    applied_rom_patches_.clear();
+    for (const auto& patch : cheats_.rom_patches()) {
+        const auto offset = static_cast<std::size_t>(patch.address & 0x01FFFFFEU);
+        if (offset + 2U > cartridge_->size()) {
+            continue;
+        }
+        applied_rom_patches_.push_back({offset, cartridge_->patch16(offset, patch.value)});
+    }
 }
 
 bool Emulator::load_state_slot(const int slot, std::string& error_message) {

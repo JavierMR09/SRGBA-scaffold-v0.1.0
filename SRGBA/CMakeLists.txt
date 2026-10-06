@@ -28,6 +28,7 @@ add_library(
     src/core/arm7tdmi.cpp
     src/core/backup.cpp
     src/core/cartridge.cpp
+    src/core/cheats.cpp
     src/core/dma.cpp
     src/core/emulator.cpp
     src/core/gba_bus.cpp
@@ -152,6 +153,7 @@ if(SRGBA_BUILD_TESTS)
         tests/arm_extended_instruction_tests.cpp
         tests/arm_instruction_tests.cpp
         tests/backup_tests.cpp
+        tests/cheat_tests.cpp
         tests/demo_rom_tests.cpp
         tests/emulator_tests.cpp
         tests/gba_bus_tests.cpp

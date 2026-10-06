@@ -38,6 +38,9 @@ class Cartridge {
     [[nodiscard]] const std::filesystem::path& path() const noexcept;
     [[nodiscard]] std::span<const std::uint8_t> bytes() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
+    // Overwrites the ROM halfword at `offset` (used by cheat ROM patches) and returns the previous
+    // value. Offsets outside the ROM are ignored and return 0.
+    std::uint16_t patch16(std::size_t offset, std::uint16_t value) noexcept;
 
   private:
     Cartridge(std::filesystem::path path, std::vector<std::uint8_t> bytes, RomHeader header);
