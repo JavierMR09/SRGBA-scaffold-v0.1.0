@@ -76,7 +76,17 @@ jobs:
           }
 
       - name: Test
-        run: ctest --test-dir build/windows -C Release --output-on-failure
+        shell: pwsh
+        run: |
+          ctest --test-dir build/windows -C Release --output-on-failure 2>&1 | Tee-Object -FilePath test.log
+          if ($LASTEXITCODE -ne 0) {
+            # Summarize the failures in one annotation (GitHub keeps only a few per step).
+            $lines = Select-String -Path test.log -Context 0,2 -Pattern '(FAILED|\*\*\*Failed|Exception|exception|with expansion)' |
+              Select-Object -First 40 |
+              ForEach-Object { @($_.Line.Trim()) + $_.Context.PostContext.Trim() }
+            Write-Output ("::error title=Test failures::" + (($lines | Where-Object { $_ }) -join '%0A'))
+            exit 1
+          }
 
       - name: Package portable ZIP
         run: cpack --config build/windows/CPackConfig.cmake -C Release
