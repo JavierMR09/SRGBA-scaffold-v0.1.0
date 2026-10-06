@@ -96,6 +96,9 @@ class StateReader {
         return static_cast<std::int64_t>(u64());
     }
     void bytes(const std::span<std::uint8_t> destination) noexcept {
+        if (destination.empty()) {
+            return;
+        }
         if (data_.size() - position_ < destination.size() || position_ > data_.size()) {
             ok_ = false;
             return;
