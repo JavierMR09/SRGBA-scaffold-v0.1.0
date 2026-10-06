@@ -51,16 +51,16 @@ constexpr std::uint32_t kGamePakBoundaryMask = 0x0001FFFFU;
 
 } // namespace
 
-GbaBus::GbaBus() noexcept {
+GbaBus::GbaBus() {
     reset();
 }
 
 void GbaBus::reset() noexcept {
-    ewram_.fill(0);
-    iwram_.fill(0);
+    std::fill(ewram_.begin(), ewram_.end(), std::uint8_t{0});
+    std::fill(iwram_.begin(), iwram_.end(), std::uint8_t{0});
     io_.fill(0);
     palette_.fill(0);
-    vram_.fill(0);
+    std::fill(vram_.begin(), vram_.end(), std::uint8_t{0});
     oam_.fill(0);
     wait_control_ = 0;
     internal_memory_control_ = 0x0D000020U;

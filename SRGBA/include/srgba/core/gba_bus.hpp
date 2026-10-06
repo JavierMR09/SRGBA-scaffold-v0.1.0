@@ -64,7 +64,7 @@ class GbaBus {
     static constexpr std::uint32_t kOamStart = 0x07000000U;
     static constexpr std::uint32_t kGamePakStart = 0x08000000U;
 
-    GbaBus() noexcept;
+    GbaBus();
     GbaBus(const GbaBus&) = delete;
     GbaBus& operator=(const GbaBus&) = delete;
     GbaBus(GbaBus&&) = delete;
@@ -209,11 +209,13 @@ class GbaBus {
 
     std::vector<std::uint8_t> bios_;
     std::span<const std::uint8_t> game_pak_{};
-    std::array<std::uint8_t, kEwramSize> ewram_{};
-    std::array<std::uint8_t, kIwramSize> iwram_{};
+    // The large memories live on the heap so an Emulator stays small enough for a thread stack
+    // (Windows gives the main thread 1 MiB).
+    std::vector<std::uint8_t> ewram_ = std::vector<std::uint8_t>(kEwramSize);
+    std::vector<std::uint8_t> iwram_ = std::vector<std::uint8_t>(kIwramSize);
     std::array<std::uint8_t, kIoSize> io_{};
     std::array<std::uint8_t, kPaletteSize> palette_{};
-    std::array<std::uint8_t, kVramSize> vram_{};
+    std::vector<std::uint8_t> vram_ = std::vector<std::uint8_t>(kVramSize);
     std::array<std::uint8_t, kOamSize> oam_{};
 
     std::uint16_t wait_control_{};

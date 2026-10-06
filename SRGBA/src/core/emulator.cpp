@@ -174,7 +174,7 @@ std::vector<std::uint8_t> Emulator::serialize(const bool include_framebuffer) co
     writer.boolean(halted_);
     if (include_framebuffer) {
         writer.section("FRAM");
-        for (const auto& pixel : framebuffer_) {
+        for (const auto& pixel : *framebuffer_) {
             writer.u8(pixel.red);
             writer.u8(pixel.green);
             writer.u8(pixel.blue);
@@ -213,7 +213,7 @@ bool Emulator::deserialize(const std::span<const std::uint8_t> data, std::string
     instruction_counter_ = reader.u64();
     halted_ = reader.boolean();
     if (has_framebuffer && reader.section("FRAM")) {
-        for (auto& pixel : framebuffer_) {
+        for (auto& pixel : *framebuffer_) {
             pixel.red = reader.u8();
             pixel.green = reader.u8();
             pixel.blue = reader.u8();
@@ -614,7 +614,7 @@ std::uint64_t Emulator::cycle_counter() const noexcept {
 }
 
 const Framebuffer& Emulator::framebuffer() const noexcept {
-    return framebuffer_;
+    return *framebuffer_;
 }
 
 const Arm7Tdmi& Emulator::cpu() const noexcept {
@@ -664,7 +664,7 @@ void Emulator::process_events() noexcept {
         while (const auto event = scheduler_.pop_due()) {
             switch (event->type) {
             case EventType::HBlankStart:
-                ppu_.on_hblank_start(bus_, scheduler_, event->timestamp, framebuffer_);
+                ppu_.on_hblank_start(bus_, scheduler_, event->timestamp, *framebuffer_);
                 break;
             case EventType::ScanlineEnd:
                 ppu_.on_scanline_end(bus_, scheduler_, event->timestamp);
@@ -743,7 +743,7 @@ void Emulator::render_idle_frame() noexcept {
         for (std::size_t x = 0; x < kScreenWidth; ++x) {
             const auto index = y * kScreenWidth + x;
             const auto glow = static_cast<std::uint8_t>((x * 22U) / kScreenWidth);
-            framebuffer_[index] = Rgba8{
+            (*framebuffer_)[index] = Rgba8{
                 static_cast<std::uint8_t>(10U + glow / 3U),
                 static_cast<std::uint8_t>(13U + glow / 2U),
                 static_cast<std::uint8_t>(22U + glow),
@@ -754,7 +754,7 @@ void Emulator::render_idle_frame() noexcept {
 }
 
 void Emulator::clear_framebuffer() noexcept {
-    framebuffer_.fill(Rgba8{0, 0, 0, 255});
+    framebuffer_->fill(Rgba8{0, 0, 0, 255});
 }
 
 } // namespace srgba::core

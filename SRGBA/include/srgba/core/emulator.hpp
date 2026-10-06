@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -151,7 +152,7 @@ class Emulator {
     std::optional<Cartridge> cartridge_;
     Arm7Tdmi cpu_{};
     GbaBus bus_{};
-    Framebuffer framebuffer_{};
+    std::unique_ptr<Framebuffer> framebuffer_{std::make_unique<Framebuffer>()};
     Ppu ppu_{};
     Scheduler scheduler_{};
     std::optional<CpuFault> fault_;
