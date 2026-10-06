@@ -64,7 +64,7 @@ class GbaBus {
     static constexpr std::uint32_t kOamStart = 0x07000000U;
     static constexpr std::uint32_t kGamePakStart = 0x08000000U;
 
-    GbaBus() noexcept;
+    GbaBus();
     GbaBus(const GbaBus&) = delete;
     GbaBus& operator=(const GbaBus&) = delete;
     GbaBus(GbaBus&&) = delete;
@@ -79,6 +79,10 @@ class GbaBus {
     // Clears volatile machine state while preserving attached BIOS and cartridge images.
     void reset() noexcept;
     void initialize_post_bios() noexcept;
+
+    // Save-state serialization of all memory, IO, and attached hardware (not the BIOS or ROM).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
 
     [[nodiscard]] bool load_bios(const std::filesystem::path& path,
                                  std::string& error_message) noexcept;
@@ -102,6 +106,14 @@ class GbaBus {
                                          BusAccess access = {}) noexcept;
     [[nodiscard]] BusWriteResult write32(std::uint32_t address, std::uint32_t value,
                                          BusAccess access = {}) noexcept;
+
+    // Side-effect-free access for cheats and tools: no wait states, open-bus latching, or
+    // save-chip protocol. `width` is 1, 2 or 4 and the address is aligned down to it. Reads see
+    // memory, IO registers (raw), and the ROM; other space reads as zero. Writes reach work RAM,
+    // palette, VRAM and OAM directly and IO through the register logic; ROM, BIOS and save
+    // memory ignore them.
+    [[nodiscard]] std::uint32_t peek(std::uint32_t address, std::size_t width) const noexcept;
+    void poke(std::uint32_t address, std::uint32_t value, std::size_t width) noexcept;
 
     [[nodiscard]] std::uint16_t wait_control() const noexcept;
     [[nodiscard]] bool game_pak_prefetch_enabled() const noexcept;
@@ -174,7 +186,6 @@ class GbaBus {
 
     [[nodiscard]] static Region region_for(std::uint32_t address) noexcept;
     [[nodiscard]] static std::size_t vram_offset(std::uint32_t address) noexcept;
-    [[nodiscard]] static std::uint32_t crc32(std::span<const std::uint8_t> bytes) noexcept;
 
     // Direct pointers into plain memory for aligned 16/32-bit accesses (nullptr when the access
     // needs the general path: BIOS, IO, SRAM, unmapped space, or past the end of the ROM).
@@ -198,11 +209,13 @@ class GbaBus {
 
     std::vector<std::uint8_t> bios_;
     std::span<const std::uint8_t> game_pak_{};
-    std::array<std::uint8_t, kEwramSize> ewram_{};
-    std::array<std::uint8_t, kIwramSize> iwram_{};
+    // The large memories live on the heap so an Emulator stays small enough for a thread stack
+    // (Windows gives the main thread 1 MiB).
+    std::vector<std::uint8_t> ewram_ = std::vector<std::uint8_t>(kEwramSize);
+    std::vector<std::uint8_t> iwram_ = std::vector<std::uint8_t>(kIwramSize);
     std::array<std::uint8_t, kIoSize> io_{};
     std::array<std::uint8_t, kPaletteSize> palette_{};
-    std::array<std::uint8_t, kVramSize> vram_{};
+    std::vector<std::uint8_t> vram_ = std::vector<std::uint8_t>(kVramSize);
     std::array<std::uint8_t, kOamSize> oam_{};
 
     std::uint16_t wait_control_{};

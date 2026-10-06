@@ -13,7 +13,7 @@
 
 The desktop frontend owns SDL, Dear ImGui, host input, audio devices, file dialogs, frame pacing,
 and presentation. The core owns the cartridge, ARM7TDMI state, GBA bus, scheduling, PPU, APU, DMA,
-timers, keypad registers, interrupts, and future save-state serialization.
+timers, keypad registers, interrupts, save states, rewind history, and cheats.
 
 The intended frontend/core exchange is deliberately small:
 
@@ -144,6 +144,49 @@ the first DMA transfer. The emulator saves "<rom>.sav" half a second after write
 ROM closes, and on shutdown, writing a temporary file and renaming it over the old save. Save data
 survives console resets.
 
+## M6 emulator features
+
+**Save states.** Every component writes its logical state through `StateWriter` (little-endian,
+field by field, never raw object memory) inside a four-character section tag. A state starts
+with the magic `SRGBASTA`, a format version, the ROM's CRC32 and game code, and optionally the
+displayed frame. `Emulator::load_state` checks the header, the game, every section tag and value
+range, and that the stream ends exactly; any failure restores the machine from a snapshot taken
+just before, so a damaged or foreign file never half-loads. Quick slots are "<rom>.ss1"-".ss9"
+beside the battery save. Save-chip contents are part of a state, and loading one marks the
+battery save as pending so it reaches disk.
+
+**Rewind.** Every other frame the emulator serializes the machine (without the picture) into a
+`RewindBuffer`. The newest snapshot is kept whole; older ones are stored as XOR differences from
+their successor with varint run lengths, so a 440 KiB state usually costs a few KiB. A memory
+budget (64 MiB by default) drops the oldest entries. A rewind step restores a snapshot and runs
+one frame to redraw the screen; the frontend steps once per displayed frame, which plays history
+back at double speed.
+
+**Cheats.** `compile_cheat` tokenizes a code (lines, spaces, `+` and `-` separators, `#`
+comments), decides its format, and decodes it into a small program: writes and fills, slides,
+read-modify-writes, pointer writes, ROM patches, and conditions that skip the next one, two, or
+all remaining operations. GameShark / Action Replay v1-v2 and Action Replay v3 codes are
+decrypted with the devices' 32-round TEA keys; Automatic mode decodes both and keeps the one whose
+decrypted content looks real (device IDs, hooks, work-RAM addresses). Enabled programs run at the
+start of each frame through `GbaBus::peek`/`poke`, which skip wait states and open-bus latching
+so cheats do not disturb timing state. ROM patch codes override cartridge halfwords while they
+are enabled; the emulator restores the original bytes when the list changes. Each game's list is
+"<rom>.cht" in the libretro layout plus a `cheatN_format` key, so libretro cheat files load
+directly and codes that cannot be decoded are kept (disabled) instead of being lost.
+
+**Frontend.** Fast-forward multiplies the frame budget (or runs frames for 12 ms per displayed
+frame in unlimited mode) and mutes audio; frame advance runs one frame while paused. Input
+bindings are stored as SDL scancode and gamepad-button names. The library scans folders on a
+background thread with `find_rom_files` and `read_rom_info`, caching results by file time and
+size. `render_display` applies a 32,768-entry LCD color table and draws grid or scanline masks at
+the screen's own pixel scale, and the game image is drawn as horizontal strips because SDL's
+software renderer cannot draw one very large textured triangle.
+
+**Smoke testing.** `SRGBA_SCREENSHOT_PATH=<file.bmp>` makes the app save a screenshot after
+`SRGBA_SCREENSHOT_FRAMES` frames (default 90) and exit; `SRGBA_OPEN_PANELS` (for example
+`cheats,controls`) opens windows first. With `SDL_VIDEO_DRIVER=offscreen` this checks the UI
+without a display.
+
 ## Planned core modules
 
 ```text
@@ -170,9 +213,12 @@ Emulator
 ## Persistence rules
 
 - Battery saves are stored as "<rom name>.sav" beside the ROM and written through a temporary file.
-- Save states will start with a magic value, schema version, ROM hash, and component sections.
-- Unsupported future state versions must fail cleanly rather than partially loading.
-- Frontend settings are not part of an emulated save state.
+- Save states ("<rom name>.ss1"-".ss9") start with a magic value, schema version, ROM CRC32, and
+  game code, followed by tagged component sections; they are written through a temporary file.
+- Unsupported state versions, other games' states, and damaged states fail cleanly without
+  changing the running machine.
+- Frontend settings and cheats are not part of an emulated save state. Cheats live in
+  "<rom name>.cht".
 
 ## Testing strategy
 

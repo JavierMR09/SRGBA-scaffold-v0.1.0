@@ -8,6 +8,8 @@ namespace srgba::core {
 
 class GbaBus;
 class Scheduler;
+class StateReader;
+class StateWriter;
 
 // The four 16-bit hardware timers (TM0CNT-TM3CNT). Free-running timers are evaluated lazily from
 // the master clock and only touch the scheduler to arm their next overflow; count-up (cascade)
@@ -17,6 +19,9 @@ class Timers {
     static constexpr std::size_t kTimerCount = 4;
 
     void reset() noexcept;
+    // Save-state serialization (see state_io.hpp).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
 
     // `offset` is relative to 0x04000100 (0x00-0x0F).
     [[nodiscard]] std::uint8_t read(std::uint32_t offset, std::uint64_t now) const noexcept;

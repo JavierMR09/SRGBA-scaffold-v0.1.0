@@ -1,4 +1,5 @@
 #include "srgba/core/ppu.hpp"
+#include "srgba/core/state_io.hpp"
 
 #include "srgba/core/dma.hpp"
 #include "srgba/core/gba_bus.hpp"
@@ -697,6 +698,29 @@ void Ppu::compose(const GbaBus& bus, const std::uint16_t control, const std::uin
             }
         }
         framebuffer[row + x] = to_rgba(color);
+    }
+}
+
+void Ppu::save_state(StateWriter& writer) const {
+    writer.section("PPU ");
+    writer.u32(vcount_);
+    writer.boolean(hblank_);
+    for (const auto& reference : affine_) {
+        writer.i32(reference.x);
+        writer.i32(reference.y);
+    }
+}
+
+void Ppu::load_state(StateReader& reader) {
+    reader.section("PPU ");
+    vcount_ = reader.u32();
+    if (vcount_ >= kLinesPerFrame) {
+        reader.fail();
+    }
+    hblank_ = reader.boolean();
+    for (auto& reference : affine_) {
+        reference.x = reader.i32();
+        reference.y = reader.i32();
     }
 }
 

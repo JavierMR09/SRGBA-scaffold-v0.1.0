@@ -70,16 +70,20 @@ call timing (the HLE BIOS returns correct results but not Nintendo's exact cycle
 Deferred: the BIOS MusicPlayer2000 sound-driver calls (games normally link their own driver),
 Atmel flash page writes, and real-time-clock cartridges.
 
-## M6 - Emulator features (next)
+## M6 - Emulator features (complete)
 
-- [ ] Versioned save states and quick slots
-- [ ] Fast-forward, frame advance, and rewind groundwork
-- [ ] Keyboard and gamepad remapping
-- [ ] Cheat engine with format-specific parsers
-- [ ] ROM folder scanning and richer library metadata
-- [ ] Optional color correction and post-processing renderer
+- [x] Versioned save states with nine quick slots per game (and rollback on damaged states)
+- [x] Fast-forward (2x-8x or unlimited), frame advance, and rewind
+- [x] Keyboard and gamepad remapping with two bindings per button
+- [x] Cheat engine: raw, CodeBreaker, GameShark / Action Replay v1-v2, and Action Replay v3
+- [x] ROM folder scanning with header and save-chip metadata, search, and drag and drop
+- [x] GBA LCD color correction and LCD grid / scanline screen filters
 
-## M7 - Compatibility and 1.0
+Deferred: cheat codes that change the encryption key (DEADFACE), encrypted CodeBreaker codes,
+GameShark button-activated codes, Action Replay v3 slide and IO-register codes, remappable
+hotkeys, and zipped ROMs in the library.
+
+## M7 - Compatibility and 1.0 (next)
 
 - [ ] Public CPU and timing suites
 - [ ] Representative homebrew and commercial-game compatibility matrix

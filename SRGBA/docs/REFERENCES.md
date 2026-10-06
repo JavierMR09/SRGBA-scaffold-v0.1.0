@@ -32,6 +32,21 @@ sequential/non-sequential cycle classification and data-bus width behavior.
 - [Tonc](https://www.coranac.com/tonc/text/), Jasper Vijn
   - Readable explanations of GBA graphics, DMA, timers, interrupts, BIOS calls, and sound
 
+## Emulator features
+
+- [GBATEK cheat device sections](https://problemkaputt.de/gbatek-gba-cheat-codes-gameshark-action-replay-v1-v2.htm)
+  (GameShark / Action Replay v1-v2, Pro Action Replay v3, and CodeBreaker): code layouts and the
+  TEA-based encryption.
+- [EnHacklopedia: Hacking GBA](https://doc.kodewerx.org/hacking_gba.html): code types for
+  CodeBreaker and GameShark / Action Replay.
+- VisualBoyAdvance-M's cheat notes (a summary of every code type in `gbaCheats.cpp`) were read as
+  documentation of code-type behavior; no code was copied.
+- The decryption is checked against published master codes: the Pokemon Ruby GameShark v1/v2
+  master code decrypts to the "AXVE" game ID, and the Pokemon Emerald Action Replay v3 master
+  code decrypts to the "BPEE" game ID.
+- The libretro `.cht` cheat-file layout (`cheats`, `cheatN_desc`, `cheatN_code`,
+  `cheatN_enable`).
+
 ## Accuracy tests
 
 - [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) (MIT): ARM, Thumb, memory, BIOS, and

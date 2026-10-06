@@ -7,6 +7,9 @@
 
 namespace srgba::core {
 
+class StateReader;
+class StateWriter;
+
 // Audio processing unit: the four Game Boy-compatible PSG channels and the two Direct Sound
 // FIFOs, mixed into 16-bit stereo at 32,768 Hz (the GBA's default PWM sample rate).
 class Apu {
@@ -22,6 +25,9 @@ class Apu {
     static constexpr std::uint8_t kFifoB = 1U << 1U;
 
     void reset() noexcept;
+    // Save-state serialization (see state_io.hpp).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
 
     // `offset` is relative to 0x04000060 (0x00-0x4F).
     [[nodiscard]] std::uint8_t read(std::uint32_t offset) const noexcept;

@@ -1,4 +1,5 @@
 #include "srgba/core/timers.hpp"
+#include "srgba/core/state_io.hpp"
 
 #include "srgba/core/gba_bus.hpp"
 #include "srgba/core/interrupts.hpp"
@@ -158,6 +159,28 @@ std::uint8_t Timers::overflow(const std::size_t index, const std::uint64_t times
     }
     schedule(index, scheduler);
     return overflowed;
+}
+
+void Timers::save_state(StateWriter& writer) const {
+    writer.section("TMRS");
+    for (const auto& timer : timers_) {
+        writer.u16(timer.reload);
+        writer.u16(timer.control);
+        writer.u16(timer.counter);
+        writer.u64(timer.start_time);
+        writer.boolean(timer.running);
+    }
+}
+
+void Timers::load_state(StateReader& reader) {
+    reader.section("TMRS");
+    for (auto& timer : timers_) {
+        timer.reload = reader.u16();
+        timer.control = reader.u16();
+        timer.counter = reader.u16();
+        timer.start_time = reader.u64();
+        timer.running = reader.boolean();
+    }
 }
 
 } // namespace srgba::core

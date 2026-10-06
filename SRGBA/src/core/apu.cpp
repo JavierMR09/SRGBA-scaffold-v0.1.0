@@ -1,4 +1,5 @@
 #include "srgba/core/apu.hpp"
+#include "srgba/core/state_io.hpp"
 
 #include <algorithm>
 
@@ -638,6 +639,141 @@ bool Apu::channel_active(const std::size_t channel) const noexcept {
 
 std::size_t Apu::fifo_size(const std::size_t fifo) const noexcept {
     return fifos_[fifo].size;
+}
+
+void Apu::save_state(StateWriter& writer) const {
+    writer.section("APU ");
+    writer.bytes(registers_);
+    for (const auto& bank : wave_ram_) {
+        writer.bytes(bank);
+    }
+    const auto write_envelope = [&writer](const Envelope& envelope) {
+        writer.u8(envelope.initial);
+        writer.u8(envelope.period);
+        writer.boolean(envelope.increase);
+        writer.u8(envelope.volume);
+        writer.u8(envelope.timer);
+    };
+    for (const auto* square : {&square1_, &square2_}) {
+        writer.boolean(square->enabled);
+        writer.boolean(square->dac);
+        writer.u16(square->frequency);
+        writer.u8(square->duty);
+        writer.u8(square->duty_step);
+        writer.i32(square->timer);
+        writer.u16(square->length);
+        writer.boolean(square->length_enable);
+        write_envelope(square->envelope);
+        writer.u8(square->sweep_period);
+        writer.u8(square->sweep_shift);
+        writer.boolean(square->sweep_negate);
+        writer.u8(square->sweep_timer);
+        writer.u16(square->shadow_frequency);
+        writer.boolean(square->sweep_enabled);
+    }
+    writer.boolean(wave_.enabled);
+    writer.boolean(wave_.dac);
+    writer.u16(wave_.frequency);
+    writer.boolean(wave_.two_banks);
+    writer.u8(wave_.selected_bank);
+    writer.u8(wave_.position);
+    writer.i32(wave_.timer);
+    writer.u16(wave_.length);
+    writer.boolean(wave_.length_enable);
+    writer.u8(wave_.volume_code);
+    writer.boolean(wave_.force_75_percent);
+    writer.boolean(noise_.enabled);
+    writer.boolean(noise_.dac);
+    writer.u16(noise_.lfsr);
+    writer.boolean(noise_.narrow);
+    writer.u8(noise_.divisor);
+    writer.u8(noise_.shift);
+    writer.i32(noise_.timer);
+    writer.u16(noise_.length);
+    writer.boolean(noise_.length_enable);
+    write_envelope(noise_.envelope);
+    for (const auto& fifo : fifos_) {
+        for (const auto sample : fifo.data) {
+            writer.u8(static_cast<std::uint8_t>(sample));
+        }
+        writer.u32(static_cast<std::uint32_t>(fifo.read_index));
+        writer.u32(static_cast<std::uint32_t>(fifo.size));
+        writer.u8(static_cast<std::uint8_t>(fifo.current));
+        writer.i64(fifo.integral);
+        writer.u64(fifo.last_change);
+    }
+    writer.u8(sequencer_step_);
+    writer.u64(last_sample_time_);
+}
+
+void Apu::load_state(StateReader& reader) {
+    reader.section("APU ");
+    reader.bytes(registers_);
+    for (auto& bank : wave_ram_) {
+        reader.bytes(bank);
+    }
+    const auto read_envelope = [&reader](Envelope& envelope) {
+        envelope.initial = reader.u8();
+        envelope.period = reader.u8();
+        envelope.increase = reader.boolean();
+        envelope.volume = static_cast<std::uint8_t>(reader.u8() & 0x0FU);
+        envelope.timer = reader.u8();
+    };
+    for (auto* square : {&square1_, &square2_}) {
+        square->enabled = reader.boolean();
+        square->dac = reader.boolean();
+        square->frequency = static_cast<std::uint16_t>(reader.u16() & 0x07FFU);
+        square->duty = static_cast<std::uint8_t>(reader.u8() & 0x03U);
+        square->duty_step = static_cast<std::uint8_t>(reader.u8() & 0x07U);
+        square->timer = reader.i32();
+        square->length = reader.u16();
+        square->length_enable = reader.boolean();
+        read_envelope(square->envelope);
+        square->sweep_period = reader.u8();
+        square->sweep_shift = static_cast<std::uint8_t>(reader.u8() & 0x07U);
+        square->sweep_negate = reader.boolean();
+        square->sweep_timer = reader.u8();
+        square->shadow_frequency = reader.u16();
+        square->sweep_enabled = reader.boolean();
+    }
+    wave_.enabled = reader.boolean();
+    wave_.dac = reader.boolean();
+    wave_.frequency = static_cast<std::uint16_t>(reader.u16() & 0x07FFU);
+    wave_.two_banks = reader.boolean();
+    wave_.selected_bank = static_cast<std::uint8_t>(reader.u8() & 1U);
+    wave_.position = static_cast<std::uint8_t>(reader.u8() & 0x3FU);
+    wave_.timer = reader.i32();
+    wave_.length = reader.u16();
+    wave_.length_enable = reader.boolean();
+    wave_.volume_code = static_cast<std::uint8_t>(reader.u8() & 0x03U);
+    wave_.force_75_percent = reader.boolean();
+    noise_.enabled = reader.boolean();
+    noise_.dac = reader.boolean();
+    noise_.lfsr = static_cast<std::uint16_t>(reader.u16() & 0x7FFFU);
+    noise_.narrow = reader.boolean();
+    noise_.divisor = static_cast<std::uint8_t>(reader.u8() & 0x07U);
+    noise_.shift = static_cast<std::uint8_t>(reader.u8() & 0x0FU);
+    noise_.timer = reader.i32();
+    noise_.length = reader.u16();
+    noise_.length_enable = reader.boolean();
+    read_envelope(noise_.envelope);
+    for (auto& fifo : fifos_) {
+        for (auto& sample : fifo.data) {
+            sample = static_cast<std::int8_t>(reader.u8());
+        }
+        fifo.read_index = reader.u32() % fifo.data.size();
+        fifo.size = reader.u32();
+        if (fifo.size > fifo.data.size()) {
+            reader.fail();
+            fifo.size = 0;
+        }
+        fifo.current = static_cast<std::int8_t>(reader.u8());
+        fifo.integral = reader.i64();
+        fifo.last_change = reader.u64();
+    }
+    sequencer_step_ = static_cast<std::uint8_t>(reader.u8() & 0x07U);
+    last_sample_time_ = reader.u64();
+    samples_.clear();
 }
 
 } // namespace srgba::core

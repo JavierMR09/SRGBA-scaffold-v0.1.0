@@ -8,6 +8,9 @@
 
 namespace srgba::core {
 
+class StateReader;
+class StateWriter;
+
 // Cartridge save memory ("backup media").
 enum class SaveType : std::uint8_t {
     None,
@@ -33,6 +36,9 @@ class BackupMemory {
     // Erases the contents (0xFF, like fresh hardware) and selects the media type.
     void configure(SaveType type);
     [[nodiscard]] SaveType type() const noexcept;
+    // Save-state serialization (see state_io.hpp).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
 
     // SRAM and flash, mapped at 0x0E000000-0x0FFFFFFF on an 8-bit bus.
     [[nodiscard]] std::uint8_t read8(std::uint32_t address) const noexcept;

@@ -7,6 +7,8 @@
 namespace srgba::core {
 
 class GbaBus;
+class StateReader;
+class StateWriter;
 
 enum class ProcessorMode : std::uint8_t {
     User = 0x10,
@@ -139,6 +141,10 @@ class Arm7Tdmi {
     Arm7Tdmi() noexcept;
 
     void reset() noexcept;
+
+    // Save-state serialization (see state_io.hpp).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
 
     // r15 stores the address of the instruction being fetched. Operand reads expose the
     // architecture's pipelined PC value (+8 in ARM state and +4 in Thumb state).

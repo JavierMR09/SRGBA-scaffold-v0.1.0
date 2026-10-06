@@ -124,4 +124,14 @@ std::size_t Cartridge::size() const noexcept {
     return bytes_.size();
 }
 
+std::uint16_t Cartridge::patch16(const std::size_t offset, const std::uint16_t value) noexcept {
+    if (offset >= bytes_.size() || bytes_.size() - offset < 2U) {
+        return 0;
+    }
+    const auto previous = static_cast<std::uint16_t>(bytes_[offset] | (bytes_[offset + 1U] << 8U));
+    bytes_[offset] = static_cast<std::uint8_t>(value);
+    bytes_[offset + 1U] = static_cast<std::uint8_t>(value >> 8U);
+    return previous;
+}
+
 } // namespace srgba::core

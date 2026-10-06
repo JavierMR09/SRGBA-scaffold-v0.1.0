@@ -1,4 +1,5 @@
 #include "srgba/core/dma.hpp"
+#include "srgba/core/state_io.hpp"
 
 #include "srgba/core/gba_bus.hpp"
 #include "srgba/core/interrupts.hpp"
@@ -229,6 +230,36 @@ void DmaController::run(const std::size_t index, GbaBus& bus) noexcept {
         bus.request_interrupts(
             static_cast<std::uint16_t>(static_cast<std::uint16_t>(Interrupt::Dma0) << index));
     }
+}
+
+void DmaController::save_state(StateWriter& writer) const {
+    writer.section("DMAC");
+    for (const auto& channel : channels_) {
+        writer.u32(channel.source);
+        writer.u32(channel.destination);
+        writer.u16(channel.count);
+        writer.u16(channel.control);
+        writer.u32(channel.internal_source);
+        writer.u32(channel.internal_destination);
+        writer.u32(channel.internal_count);
+    }
+    writer.u32(stall_cycles_);
+    writer.u32(last_value_);
+}
+
+void DmaController::load_state(StateReader& reader) {
+    reader.section("DMAC");
+    for (auto& channel : channels_) {
+        channel.source = reader.u32();
+        channel.destination = reader.u32();
+        channel.count = reader.u16();
+        channel.control = reader.u16();
+        channel.internal_source = reader.u32();
+        channel.internal_destination = reader.u32();
+        channel.internal_count = reader.u32();
+    }
+    stall_cycles_ = reader.u32();
+    last_value_ = reader.u32();
 }
 
 } // namespace srgba::core

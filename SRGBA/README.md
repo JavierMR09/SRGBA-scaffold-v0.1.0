@@ -3,10 +3,11 @@
 SRGBA is a clean-room Game Boy Advance emulator project written in C++20. The initial target is
 Windows 10/11 x64, with a platform-independent emulation core and an SDL3 desktop frontend.
 
-> **Project status:** M5 sound and battery saves. SRGBA emulates the ARM7TDMI (passing the public
-> ARM, Thumb, memory, BIOS, pipeline, and save-chip test suites), every video mode with sprites and
+> **Project status:** M6 emulator features. SRGBA emulates the ARM7TDMI (passing the public ARM,
+> Thumb, memory, BIOS, pipeline, and save-chip test suites), every video mode with sprites and
 > effects, DMA, timers, all six sound channels, and SRAM/Flash/EEPROM saves, with no BIOS dump
-> required. Save states, fast-forward, and cheats arrive in M6.
+> required. It adds save states, fast-forward, rewind, cheats, control remapping, a ROM library,
+> and LCD screen filters. M7 focuses on game compatibility on the way to 1.0.
 
 ## Try it
 
@@ -21,8 +22,29 @@ Download the latest `SRGBA-windows-x64` ZIP, extract it anywhere, and run `SRGBA
   and sound together.
 
 Game progress is saved automatically to a `.sav` file next to the ROM (the same format other
-emulators use, so saves can move between them). Press **M** to mute; volume is in **View >
-Settings**.
+emulators use, so saves can move between them).
+
+### Playing
+
+- **Library:** choose **Add ROM folder** (or drop a folder on the window) and SRGBA lists every
+  `.gba` file in it with its title, game code, and save type. Search it and double-click to play.
+  You can also drop a ROM on the window or onto `SRGBA.exe`.
+- **Save states:** nine slots per game. **Shift+F1-F9** saves, **F1-F9** loads, and the **States**
+  menu shows when each slot was saved.
+- **Speed:** hold **Tab** to fast-forward (2x-8x or as fast as possible, set in **View >
+  Settings > Emulation**), hold **`** (the key left of 1) to rewind, press **N** to step one frame
+  while paused, and **Space** to pause. On a gamepad, hold the right trigger to fast-forward and
+  the left trigger to rewind.
+- **Cheats:** **Tools > Cheats** accepts raw `address:value` codes, CodeBreaker codes, and
+  GameShark / Action Replay codes (v1-v2 and v3, encrypted as printed). Automatic mode detects the
+  format. Each game's cheats are kept in a `.cht` file beside it, and libretro cheat files work too.
+- **Looks:** **View > GBA LCD colors** recreates the original screen's colors, and **View > Screen
+  filter** adds an LCD grid or scanlines.
+
+### Controls
+
+Every button can be remapped (two keys and two gamepad buttons each) in **View > Settings >
+Controls**. The defaults are:
 
 | GBA      | Keyboard                 | Controller                     |
 |----------|--------------------------|--------------------------------|
@@ -33,10 +55,13 @@ Settings**.
 | Select   | Backspace or Right Shift | Back / View                    |
 | D-pad    | Arrow keys               | D-pad or left stick            |
 
+Other hotkeys: **Ctrl+O** opens a ROM, **Ctrl+R** resets, **M** mutes, and **F11** toggles
+fullscreen.
+
 ## What works in this scaffold
 
 - Native, resizable desktop window
-- Dear ImGui menu, landing page, game view, and settings panel
+- Dear ImGui menu, landing page with library, game view, settings, and cheat editor
 - Native `.gba` / `.agb` file dialog
 - Cartridge title, game code, maker code, size, fixed-byte, and checksum parsing
 - Recent-ROM list and persistent video settings
@@ -82,6 +107,15 @@ Settings**.
   program, bank switching), and 512 B/8 KiB EEPROM over DMA
 - Automatic battery saves: written half a second after the game stops writing, on ROM close, and
   on exit, through a temporary file and rename so a crash never corrupts a save
+- Versioned save states with nine quick slots, validated on load and rolled back on failure
+- Rewind history stored as compressed differences under a memory budget, fast-forward, and frame
+  advance
+- Remappable keyboard and gamepad controls with two bindings per GBA button
+- Cheat engine for raw, CodeBreaker, GameShark / Action Replay v1-v2, and Action Replay v3 codes,
+  including ROM patches, with per-game libretro-compatible `.cht` files
+- ROM library with background folder scanning, header and save-chip metadata, and search
+- GBA LCD color correction and LCD grid / scanline filters drawn at the screen's resolution
+- Drag-and-drop and command-line ROM loading
 - Isolated, testable `srgba_core` library
 - Automated core tests on Linux and full application builds on Windows
 - GitHub Actions release ZIP generation
@@ -147,8 +181,8 @@ hardware components.
 
 ## ROMs and BIOS files
 
-SRGBA does not contain games, commercial ROMs, Nintendo artwork, encryption keys, or Nintendo's
-proprietary GBA BIOS. Users are responsible for supplying legally obtained software. ROM and BIOS
+SRGBA does not contain games, commercial ROMs, Nintendo artwork, Nintendo encryption keys, or
+Nintendo's proprietary GBA BIOS. Users are responsible for supplying legally obtained software. ROM and BIOS
 file patterns are excluded from Git by default.
 
 Direct boot is enabled by default and initializes the CPU, stack banks, and minimum post-BIOS IO
