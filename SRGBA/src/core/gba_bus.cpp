@@ -1,5 +1,8 @@
 #include "srgba/core/gba_bus.hpp"
 
+#include "srgba/core/checksum.hpp"
+#include "srgba/core/state_io.hpp"
+
 #include "srgba/core/system_bios.hpp"
 
 #include <algorithm>
@@ -241,12 +244,6 @@ BusReadResult GbaBus::read16(const std::uint32_t address, const BusAccess access
         latch_bus_value(bit, 2U);
         return {bit, fetch_cycles(address, 2U, access)};
     }
-    if (region_for(address) == Region::Sram) {
-        // The save chip sits on an 8-bit bus: wider reads repeat the addressed byte.
-        const auto value = static_cast<std::uint32_t>(backup_.read8(address)) * 0x0101U;
-        latch_bus_value(value, 2U);
-        return {value, access_cycles(address, 2U, access.sequence)};
-    }
     if (const auto* memory = fast_read_pointer(aligned_address, 2U)) {
         auto halfword = static_cast<std::uint16_t>(memory[0] | (memory[1] << 8U));
         if ((address & 1U) != 0U) {
@@ -254,6 +251,12 @@ BusReadResult GbaBus::read16(const std::uint32_t address, const BusAccess access
         }
         latch_bus_value(halfword, 2U);
         return {halfword, fetch_cycles(address, 2U, access)};
+    }
+    if (region_for(address) == Region::Sram) {
+        // The save chip sits on an 8-bit bus: wider reads repeat the addressed byte.
+        const auto value = static_cast<std::uint32_t>(backup_.read8(address)) * 0x0101U;
+        latch_bus_value(value, 2U);
+        return {value, access_cycles(address, 2U, access.sequence)};
     }
     bool low_mapped = false;
     bool high_mapped = false;
@@ -278,11 +281,6 @@ BusReadResult GbaBus::read16(const std::uint32_t address, const BusAccess access
 
 BusReadResult GbaBus::read32(const std::uint32_t address, const BusAccess access) noexcept {
     const auto aligned_address = address & ~3U;
-    if (region_for(address) == Region::Sram) {
-        const auto value = replicate_byte(backup_.read8(address));
-        latch_bus_value(value, 4U);
-        return {value, access_cycles(address, 4U, access.sequence)};
-    }
     if (const auto* memory = fast_read_pointer(aligned_address, 4U)) {
         const auto word = static_cast<std::uint32_t>(memory[0]) |
                           (static_cast<std::uint32_t>(memory[1]) << 8U) |
@@ -291,6 +289,11 @@ BusReadResult GbaBus::read32(const std::uint32_t address, const BusAccess access
         const auto value = std::rotr(word, static_cast<int>((address & 3U) * 8U));
         latch_bus_value(value, 4U);
         return {value, fetch_cycles(address, 4U, access)};
+    }
+    if (region_for(address) == Region::Sram) {
+        const auto value = replicate_byte(backup_.read8(address));
+        latch_bus_value(value, 4U);
+        return {value, access_cycles(address, 4U, access.sequence)};
     }
     std::uint32_t value = 0;
     bool all_mapped = true;
@@ -330,15 +333,15 @@ BusWriteResult GbaBus::write16(const std::uint32_t address, const std::uint16_t 
         latch_bus_value(value, 2U);
         return {access_cycles(address, 2U, access.sequence)};
     }
-    if (region_for(address) == Region::Sram) {
-        // Only the byte lane selected by the address reaches the 8-bit save chip.
-        backup_.write8(address, static_cast<std::uint8_t>(value >> ((address & 1U) * 8U)));
-        latch_bus_value(value, 2U);
-        return {access_cycles(address, 2U, access.sequence)};
-    }
     if (auto* memory = fast_write_pointer(aligned_address)) {
         memory[0] = static_cast<std::uint8_t>(value);
         memory[1] = static_cast<std::uint8_t>(value >> 8U);
+        latch_bus_value(value, 2U);
+        return {access_cycles(address, 2U, access.sequence)};
+    }
+    if (region_for(address) == Region::Sram) {
+        // Only the byte lane selected by the address reaches the 8-bit save chip.
+        backup_.write8(address, static_cast<std::uint8_t>(value >> ((address & 1U) * 8U)));
         latch_bus_value(value, 2U);
         return {access_cycles(address, 2U, access.sequence)};
     }
@@ -351,15 +354,15 @@ BusWriteResult GbaBus::write16(const std::uint32_t address, const std::uint16_t 
 BusWriteResult GbaBus::write32(const std::uint32_t address, const std::uint32_t value,
                                const BusAccess access) noexcept {
     const auto aligned_address = address & ~3U;
-    if (region_for(address) == Region::Sram) {
-        backup_.write8(address, static_cast<std::uint8_t>(value >> ((address & 3U) * 8U)));
-        latch_bus_value(value, 4U);
-        return {access_cycles(address, 4U, access.sequence)};
-    }
     if (auto* memory = fast_write_pointer(aligned_address)) {
         for (std::size_t index = 0; index < 4U; ++index) {
             memory[index] = byte_at(value, index);
         }
+        latch_bus_value(value, 4U);
+        return {access_cycles(address, 4U, access.sequence)};
+    }
+    if (region_for(address) == Region::Sram) {
+        backup_.write8(address, static_cast<std::uint8_t>(value >> ((address & 3U) * 8U)));
         latch_bus_value(value, 4U);
         return {access_cycles(address, 4U, access.sequence)};
     }
@@ -599,18 +602,6 @@ std::size_t GbaBus::vram_offset(const std::uint32_t address) noexcept {
         offset -= 0x8000U;
     }
     return offset;
-}
-
-std::uint32_t GbaBus::crc32(const std::span<const std::uint8_t> bytes) noexcept {
-    std::uint32_t value = 0xFFFFFFFFU;
-    for (const auto byte : bytes) {
-        value ^= byte;
-        for (unsigned bit_index = 0; bit_index < 8U; ++bit_index) {
-            const auto mask = 0U - (value & 1U);
-            value = (value >> 1U) ^ (0xEDB88320U & mask);
-        }
-    }
-    return ~value;
 }
 
 std::uint8_t GbaBus::read_byte(const std::uint32_t address, const BusAccess& access,
@@ -937,6 +928,50 @@ std::uint32_t GbaBus::game_pak_cycles(const std::uint32_t address, const std::si
 
     const bool second_boundary = ((aligned_address + 2U) & kGamePakBoundaryMask) == 0U;
     return first_cycles + (second_boundary ? nonsequential_cycles : sequential_cycles);
+}
+
+void GbaBus::save_state(StateWriter& writer) const {
+    writer.section("BUS ");
+    writer.bytes(ewram_);
+    writer.bytes(iwram_);
+    writer.bytes(io_);
+    writer.bytes(palette_);
+    writer.bytes(vram_);
+    writer.bytes(oam_);
+    writer.u16(wait_control_);
+    writer.u32(internal_memory_control_);
+    writer.u32(bios_latch_);
+    writer.u32(open_bus_);
+    writer.u16(key_input_);
+    writer.boolean(halt_requested_);
+    writer.boolean(affine_reload_[0]);
+    writer.boolean(affine_reload_[1]);
+    timers_.save_state(writer);
+    dma_.save_state(writer);
+    backup_.save_state(writer);
+    apu_.save_state(writer);
+}
+
+void GbaBus::load_state(StateReader& reader) {
+    reader.section("BUS ");
+    reader.bytes(ewram_);
+    reader.bytes(iwram_);
+    reader.bytes(io_);
+    reader.bytes(palette_);
+    reader.bytes(vram_);
+    reader.bytes(oam_);
+    wait_control_ = static_cast<std::uint16_t>(reader.u16() & kWaitControlWritableMask);
+    internal_memory_control_ = reader.u32();
+    bios_latch_ = reader.u32();
+    open_bus_ = reader.u32();
+    key_input_ = static_cast<std::uint16_t>(reader.u16() & kKeyMask);
+    halt_requested_ = reader.boolean();
+    affine_reload_[0] = reader.boolean();
+    affine_reload_[1] = reader.boolean();
+    timers_.load_state(reader);
+    dma_.load_state(reader);
+    backup_.load_state(reader);
+    apu_.load_state(reader);
 }
 
 } // namespace srgba::core

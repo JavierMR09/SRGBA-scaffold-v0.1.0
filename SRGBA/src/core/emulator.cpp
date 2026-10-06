@@ -1,10 +1,13 @@
 #include "srgba/core/emulator.hpp"
 
+#include "srgba/core/checksum.hpp"
 #include "srgba/core/hle_bios.hpp"
 #include "srgba/core/save_file.hpp"
+#include "srgba/core/state_io.hpp"
 #include "srgba/core/system_bios.hpp"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <utility>
 
@@ -15,6 +18,9 @@ constexpr std::uint64_t kMasterCyclesPerFrame = Ppu::kCyclesPerFrame;
 // Battery saves are written once the game has stopped writing for half a second.
 constexpr std::uint32_t kAutosaveDelayFrames = 30;
 constexpr std::size_t kMaximumSaveFileSize = 256U * 1024U;
+constexpr std::size_t kMaximumStateFileSize = 4U * 1024U * 1024U;
+constexpr std::array<std::uint8_t, 8> kStateMagic{'S', 'R', 'G', 'B', 'A', 'S', 'T', 'A'};
+constexpr std::uint64_t kRewindIntervalFrames = 2;
 static_assert(kMasterCyclesPerFrame == 280896U);
 
 } // namespace
@@ -33,6 +39,7 @@ bool Emulator::load_rom(const std::filesystem::path& path, std::string& error_me
         auto cartridge = Cartridge::load(path);
         static_cast<void>(flush_save()); // keep the previous game's progress
         cartridge_ = std::move(cartridge);
+        rom_crc32_ = crc32(cartridge_->bytes());
         bus_.set_game_pak(cartridge_->bytes());
         bus_.backup().configure(detect_save_type(cartridge_->bytes()));
         load_battery_save();
@@ -59,6 +66,8 @@ void Emulator::unload_rom() noexcept {
     static_cast<void>(flush_save());
     bus_.backup().configure(SaveType::None);
     save_path_.clear();
+    rewind_.clear();
+    rom_crc32_ = 0;
     bus_.clear_game_pak();
     cartridge_.reset();
     bus_.reset();
@@ -102,7 +111,203 @@ void Emulator::run_frame() noexcept {
     if (scheduler_.now() >= frame_end) {
         ++frame_counter_;
         update_autosave();
+        if (rewind_enabled_ && !suppress_rewind_capture_ &&
+            frame_counter_ % kRewindIntervalFrames == 0U) {
+            rewind_.push(serialize(false));
+        }
     }
+}
+
+std::filesystem::path Emulator::game_file_path(const std::string_view extension) const {
+    if (!cartridge_) {
+        return {};
+    }
+    auto file_name = cartridge_->path().filename();
+    file_name.replace_extension(std::filesystem::path(std::string(extension)));
+    return save_directory_ ? *save_directory_ / file_name
+                           : cartridge_->path().parent_path() / file_name;
+}
+
+std::vector<std::uint8_t> Emulator::serialize(const bool include_framebuffer) const {
+    StateWriter writer(include_framebuffer ? 560U * 1024U : 440U * 1024U);
+    writer.bytes(kStateMagic);
+    writer.u32(kSaveStateVersion);
+    writer.u32(rom_crc32_);
+    const auto& code = cartridge_ ? cartridge_->header().game_code : std::string{};
+    for (std::size_t index = 0; index < 4U; ++index) {
+        writer.u8(index < code.size() ? static_cast<std::uint8_t>(code[index]) : 0U);
+    }
+    writer.boolean(include_framebuffer);
+
+    cpu_.save_state(writer);
+    bus_.save_state(writer);
+    ppu_.save_state(writer);
+    scheduler_.save_state(writer);
+    writer.section("EMU ");
+    writer.u64(frame_counter_);
+    writer.u64(instruction_counter_);
+    writer.boolean(halted_);
+    if (include_framebuffer) {
+        writer.section("FRAM");
+        for (const auto& pixel : framebuffer_) {
+            writer.u8(pixel.red);
+            writer.u8(pixel.green);
+            writer.u8(pixel.blue);
+        }
+    }
+    writer.section("END ");
+    return writer.take();
+}
+
+bool Emulator::deserialize(const std::span<const std::uint8_t> data, std::string& error_message) {
+    StateReader reader(data);
+    std::array<std::uint8_t, 8> magic{};
+    reader.bytes(magic);
+    if (!reader.ok() || magic != kStateMagic) {
+        error_message = "This file is not an SRGBA save state.";
+        return false;
+    }
+    if (reader.u32() != kSaveStateVersion) {
+        error_message = "This save state was made by an incompatible version of SRGBA.";
+        return false;
+    }
+    if (reader.u32() != rom_crc32_) {
+        error_message = "This save state belongs to a different game (or a different ROM dump).";
+        return false;
+    }
+    std::array<std::uint8_t, 4> game_code{};
+    reader.bytes(game_code);
+    const bool has_framebuffer = reader.boolean();
+
+    cpu_.load_state(reader);
+    bus_.load_state(reader);
+    ppu_.load_state(reader);
+    scheduler_.load_state(reader);
+    reader.section("EMU ");
+    frame_counter_ = reader.u64();
+    instruction_counter_ = reader.u64();
+    halted_ = reader.boolean();
+    if (has_framebuffer && reader.section("FRAM")) {
+        for (auto& pixel : framebuffer_) {
+            pixel.red = reader.u8();
+            pixel.green = reader.u8();
+            pixel.blue = reader.u8();
+            pixel.alpha = 255;
+        }
+    }
+    reader.section("END ");
+    if (!reader.ok() || !reader.at_end()) {
+        error_message = "The save state is damaged or incomplete.";
+        return false;
+    }
+    fault_.reset();
+    bus_.set_pressed_keys(pressed_keys_); // input is live; never restored from a state
+    error_message.clear();
+    return true;
+}
+
+std::vector<std::uint8_t> Emulator::save_state() const {
+    if (!cartridge_) {
+        return {};
+    }
+    return serialize(true);
+}
+
+bool Emulator::load_state(const std::span<const std::uint8_t> data, std::string& error_message) {
+    if (!cartridge_) {
+        error_message = "Load a game before loading a save state.";
+        return false;
+    }
+    // Keep a copy so a state that fails part-way through cannot leave a half-loaded machine.
+    const auto previous = serialize(true);
+    if (!deserialize(data, error_message)) {
+        std::string ignored;
+        static_cast<void>(deserialize(previous, ignored));
+        return false;
+    }
+    if (state_ == RunState::Empty) {
+        state_ = RunState::Running;
+    }
+    return true;
+}
+
+std::filesystem::path Emulator::state_slot_path(const int slot) const {
+    if (slot < 1 || slot > kStateSlotCount) {
+        return {};
+    }
+    return game_file_path(".ss" + std::to_string(slot));
+}
+
+bool Emulator::save_state_slot(const int slot, std::string& error_message) {
+    const auto path = state_slot_path(slot);
+    if (path.empty()) {
+        error_message = "Load a game before saving a state.";
+        return false;
+    }
+    if (save_directory_) {
+        std::error_code error;
+        std::filesystem::create_directories(*save_directory_, error);
+    }
+    return write_file_atomically(path, save_state(), error_message);
+}
+
+bool Emulator::load_state_slot(const int slot, std::string& error_message) {
+    const auto path = state_slot_path(slot);
+    if (path.empty()) {
+        error_message = "Load a game before loading a state.";
+        return false;
+    }
+    const auto bytes = read_binary_file(path, kMaximumStateFileSize);
+    if (!bytes) {
+        error_message = "Slot " + std::to_string(slot) + " is empty.";
+        return false;
+    }
+    return load_state(*bytes, error_message);
+}
+
+void Emulator::set_rewind_enabled(const bool enabled, const std::size_t memory_limit_bytes) {
+    rewind_enabled_ = enabled;
+    rewind_.set_memory_limit(memory_limit_bytes);
+    if (!enabled) {
+        rewind_.clear();
+    }
+}
+
+bool Emulator::rewind_enabled() const noexcept {
+    return rewind_enabled_;
+}
+
+bool Emulator::rewind_step() {
+    if (!cartridge_ || !rewind_enabled_) {
+        return false;
+    }
+    auto snapshot = rewind_.pop();
+    if (!snapshot) {
+        return false;
+    }
+    std::string error;
+    if (!deserialize(*snapshot, error)) {
+        rewind_.clear();
+        return false;
+    }
+    // Snapshots omit the picture; run the next frame to show the restored moment.
+    const auto previous_state = state_;
+    state_ = RunState::Running;
+    suppress_rewind_capture_ = true;
+    run_frame();
+    suppress_rewind_capture_ = false;
+    if (state_ == RunState::Running) {
+        state_ = previous_state;
+    }
+    return true;
+}
+
+std::size_t Emulator::rewind_depth() const noexcept {
+    return rewind_.size();
+}
+
+std::size_t Emulator::rewind_memory_used() const noexcept {
+    return rewind_.memory_used();
 }
 
 void Emulator::set_save_directory(std::optional<std::filesystem::path> directory) {
@@ -121,10 +326,7 @@ void Emulator::load_battery_save() {
     if (!cartridge_ || bus_.backup().type() == SaveType::None) {
         return;
     }
-    auto file_name = cartridge_->path().filename();
-    file_name.replace_extension(".sav");
-    save_path_ = save_directory_ ? *save_directory_ / file_name
-                                 : cartridge_->path().parent_path() / file_name;
+    save_path_ = game_file_path(".sav");
     if (!battery_saves_enabled_) {
         return;
     }
@@ -350,6 +552,7 @@ void Emulator::reset_machine() noexcept {
     scheduler_.schedule(EventType::ApuSequencer, Apu::kCyclesPerSequencerStep);
     halted_ = false;
     fault_.reset();
+    rewind_.clear();
     clear_framebuffer();
     state_ = cartridge_ ? RunState::Running : RunState::Empty;
     frame_counter_ = 0;

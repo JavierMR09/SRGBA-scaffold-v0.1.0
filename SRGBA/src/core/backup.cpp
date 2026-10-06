@@ -1,4 +1,5 @@
 #include "srgba/core/backup.hpp"
+#include "srgba/core/state_io.hpp"
 
 #include <algorithm>
 #include <array>
@@ -342,6 +343,62 @@ void BackupMemory::mark_clean() noexcept {
 
 void BackupMemory::mark_written() noexcept {
     ++write_generation_;
+    dirty_ = true;
+}
+
+void BackupMemory::save_state(StateWriter& writer) const {
+    writer.section("SAVE");
+    writer.u8(static_cast<std::uint8_t>(type_));
+    writer.u32(static_cast<std::uint32_t>(data_.size()));
+    writer.bytes(data_);
+    writer.u8(static_cast<std::uint8_t>(flash_state_));
+    writer.boolean(flash_id_mode_);
+    writer.boolean(flash_erase_armed_);
+    writer.boolean(flash_write_armed_);
+    writer.boolean(flash_bank_switch_armed_);
+    writer.u32(static_cast<std::uint32_t>(flash_bank_));
+    writer.u32(static_cast<std::uint32_t>(eeprom_address_bits_));
+    writer.u32(static_cast<std::uint32_t>(eeprom_bits_.size()));
+    writer.bytes(eeprom_bits_);
+    writer.u64(eeprom_read_buffer_);
+    writer.u32(static_cast<std::uint32_t>(eeprom_read_position_));
+}
+
+void BackupMemory::load_state(StateReader& reader) {
+    reader.section("SAVE");
+    const auto type = reader.u8();
+    const auto size = reader.u32();
+    if (type > static_cast<std::uint8_t>(SaveType::Eeprom) || size > kFlashBankSize * 2U) {
+        reader.fail();
+        return;
+    }
+    type_ = static_cast<SaveType>(type);
+    data_.assign(size, 0xFFU);
+    reader.bytes(data_);
+    ++write_generation_;
+    const auto flash_state = reader.u8();
+    if (flash_state > static_cast<std::uint8_t>(FlashCommandState::SecondUnlock)) {
+        reader.fail();
+        return;
+    }
+    flash_state_ = static_cast<FlashCommandState>(flash_state);
+    flash_id_mode_ = reader.boolean();
+    flash_erase_armed_ = reader.boolean();
+    flash_write_armed_ = reader.boolean();
+    flash_bank_switch_armed_ = reader.boolean();
+    flash_bank_ = reader.u32() & 1U;
+    eeprom_address_bits_ = reader.u32();
+    const auto bit_count = reader.u32();
+    if (bit_count > 128U ||
+        (eeprom_address_bits_ != 0U && eeprom_address_bits_ != 6U && eeprom_address_bits_ != 14U)) {
+        reader.fail();
+        return;
+    }
+    eeprom_bits_.assign(bit_count, 0);
+    reader.bytes(eeprom_bits_);
+    eeprom_read_buffer_ = reader.u64();
+    eeprom_read_position_ = reader.u32();
+    // The restored contents replace what is on disk, so the next autosave writes them.
     dirty_ = true;
 }
 

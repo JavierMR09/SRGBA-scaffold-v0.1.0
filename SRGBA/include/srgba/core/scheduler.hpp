@@ -7,6 +7,8 @@
 #include <limits>
 #include <optional>
 
+#include "srgba/core/state_io.hpp"
+
 namespace srgba::core {
 
 // Every hardware event that can be raised on the master clock.
@@ -111,6 +113,28 @@ class Scheduler {
         deadlines_[best] = kUnscheduled;
         refresh_next_deadline();
         return event;
+    }
+
+    void save_state(StateWriter& writer) const {
+        writer.section("SCHD");
+        writer.u64(now_);
+        writer.u32(static_cast<std::uint32_t>(kEventCount));
+        for (const auto deadline : deadlines_) {
+            writer.u64(deadline);
+        }
+    }
+
+    void load_state(StateReader& reader) {
+        reader.section("SCHD");
+        now_ = reader.u64();
+        if (reader.u32() != kEventCount) {
+            reader.fail();
+            return;
+        }
+        for (auto& deadline : deadlines_) {
+            deadline = reader.u64();
+        }
+        refresh_next_deadline();
     }
 
   private:

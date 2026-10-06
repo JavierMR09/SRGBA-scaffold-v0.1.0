@@ -1,4 +1,5 @@
 #include "srgba/core/arm7tdmi.hpp"
+#include "srgba/core/state_io.hpp"
 
 #include "srgba/core/gba_bus.hpp"
 
@@ -1923,6 +1924,66 @@ bool Arm7Tdmi::try_take_fiq() noexcept {
     }
     take_exception(ExceptionType::Fiq);
     return true;
+}
+
+void Arm7Tdmi::save_state(StateWriter& writer) const {
+    writer.section("CPU7");
+    const auto write_all = [&writer](const auto& values) {
+        for (const auto value : values) {
+            writer.u32(value);
+        }
+    };
+    write_all(low_registers_);
+    write_all(user_high_registers_);
+    write_all(fiq_high_registers_);
+    write_all(user_sp_lr_);
+    write_all(fiq_sp_lr_);
+    write_all(supervisor_sp_lr_);
+    write_all(abort_sp_lr_);
+    write_all(irq_sp_lr_);
+    write_all(undefined_sp_lr_);
+    writer.u32(program_counter_);
+    writer.boolean(next_fetch_sequential_);
+    write_all(pipeline_);
+    writer.u32(pipeline_address_);
+    writer.boolean(pipeline_valid_);
+    writer.u32(cpsr_.value());
+    for (const auto* status :
+         {&spsr_fiq_, &spsr_supervisor_, &spsr_abort_, &spsr_irq_, &spsr_undefined_}) {
+        writer.u32(status->value());
+    }
+}
+
+void Arm7Tdmi::load_state(StateReader& reader) {
+    reader.section("CPU7");
+    const auto read_all = [&reader](auto& values) {
+        for (auto& value : values) {
+            value = reader.u32();
+        }
+    };
+    read_all(low_registers_);
+    read_all(user_high_registers_);
+    read_all(fiq_high_registers_);
+    read_all(user_sp_lr_);
+    read_all(fiq_sp_lr_);
+    read_all(supervisor_sp_lr_);
+    read_all(abort_sp_lr_);
+    read_all(irq_sp_lr_);
+    read_all(undefined_sp_lr_);
+    program_counter_ = reader.u32();
+    next_fetch_sequential_ = reader.boolean();
+    read_all(pipeline_);
+    pipeline_address_ = reader.u32();
+    pipeline_valid_ = reader.boolean();
+    if (!cpsr_.assign(reader.u32())) {
+        reader.fail();
+    }
+    for (auto* status :
+         {&spsr_fiq_, &spsr_supervisor_, &spsr_abort_, &spsr_irq_, &spsr_undefined_}) {
+        if (!status->assign(reader.u32())) {
+            reader.fail();
+        }
+    }
 }
 
 } // namespace srgba::core

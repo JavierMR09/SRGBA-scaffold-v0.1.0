@@ -5,12 +5,15 @@
 #include "srgba/core/framebuffer.hpp"
 #include "srgba/core/gba_bus.hpp"
 #include "srgba/core/ppu.hpp"
+#include "srgba/core/rewind.hpp"
 #include "srgba/core/scheduler.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace srgba::core {
@@ -54,6 +57,26 @@ class Emulator {
     [[nodiscard]] const std::filesystem::path& save_path() const noexcept;
     [[nodiscard]] bool save_pending() const noexcept;
     [[nodiscard]] const std::string& save_error() const noexcept;
+
+    // Save states. A state captures the whole machine (including save-chip contents) and is tied
+    // to the ROM it was made with. Loading a damaged or foreign state leaves the game untouched.
+    static constexpr std::uint32_t kSaveStateVersion = 1;
+    static constexpr int kStateSlotCount = 9;
+    [[nodiscard]] std::vector<std::uint8_t> save_state() const;
+    [[nodiscard]] bool load_state(std::span<const std::uint8_t> data, std::string& error_message);
+    // Slot files are "<rom name>.ss1" ... ".ss9" beside the battery save.
+    [[nodiscard]] std::filesystem::path state_slot_path(int slot) const;
+    [[nodiscard]] bool save_state_slot(int slot, std::string& error_message);
+    [[nodiscard]] bool load_state_slot(int slot, std::string& error_message);
+
+    // Rewind keeps a snapshot every other frame (about 20 seconds within the default budget).
+    void set_rewind_enabled(bool enabled, std::size_t memory_limit_bytes = 64U * 1024U * 1024U);
+    [[nodiscard]] bool rewind_enabled() const noexcept;
+    // Steps back two frames and renders the restored moment. Returns false at the start of
+    // the recorded history.
+    bool rewind_step();
+    [[nodiscard]] std::size_t rewind_depth() const noexcept;
+    [[nodiscard]] std::size_t rewind_memory_used() const noexcept;
     // Increments each time save data reaches the disk (lets the frontend show a notice).
     [[nodiscard]] std::uint64_t saves_written() const noexcept;
 
@@ -99,6 +122,9 @@ class Emulator {
   private:
     void reset_machine() noexcept;
     void initialize_direct_boot() noexcept;
+    [[nodiscard]] std::vector<std::uint8_t> serialize(bool include_framebuffer) const;
+    [[nodiscard]] bool deserialize(std::span<const std::uint8_t> data, std::string& error_message);
+    [[nodiscard]] std::filesystem::path game_file_path(std::string_view extension) const;
     void load_battery_save();
     void update_autosave() noexcept;
     void process_events() noexcept;
@@ -128,6 +154,11 @@ class Emulator {
     std::uint32_t frames_since_save_write_{};
     std::uint64_t saves_written_{};
     std::string save_error_;
+
+    std::uint32_t rom_crc32_{};
+    RewindBuffer rewind_{};
+    bool rewind_enabled_{};
+    bool suppress_rewind_capture_{};
 };
 
 } // namespace srgba::core

@@ -7,6 +7,8 @@
 namespace srgba::core {
 
 class GbaBus;
+class StateReader;
+class StateWriter;
 
 enum class DmaTiming : std::uint8_t {
     Immediate = 0,
@@ -22,6 +24,9 @@ class DmaController {
     static constexpr std::size_t kChannelCount = 4;
 
     void reset() noexcept;
+    // Save-state serialization (see state_io.hpp).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
 
     // `offset` is relative to 0x040000B0 (0x00-0x2F).
     [[nodiscard]] std::uint8_t read(std::uint32_t offset) const noexcept;

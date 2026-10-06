@@ -33,6 +33,7 @@ add_library(
     src/core/gba_bus.cpp
     src/core/hle_bios.cpp
     src/core/ppu.cpp
+    src/core/rewind.cpp
     src/core/save_file.cpp
     src/core/system_bios.cpp
     src/core/timers.cpp
@@ -161,6 +162,7 @@ if(SRGBA_BUILD_TESTS)
         tests/public_test_rom_tests.cpp
         tests/ppu_tests.cpp
         tests/rom_header_tests.cpp
+        tests/save_state_tests.cpp
         tests/scheduler_tests.cpp
         tests/thumb_instruction_tests.cpp
         tests/timer_dma_tests.cpp

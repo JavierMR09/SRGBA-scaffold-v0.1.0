@@ -10,6 +10,8 @@ namespace srgba::core {
 
 class GbaBus;
 class Scheduler;
+class StateReader;
+class StateWriter;
 
 // Picture processing unit: display timing (HBlank, VBlank, VCount and their interrupts and DMA
 // triggers) and a scanline renderer covering every video mode, regular and affine backgrounds,
@@ -25,6 +27,9 @@ class Ppu {
     static constexpr std::uint32_t kCyclesPerFrame = kCyclesPerLine * kLinesPerFrame;
 
     void reset(GbaBus& bus, Scheduler& scheduler) noexcept;
+    // Save-state serialization (see state_io.hpp).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
 
     // Scheduler event handlers. `timestamp` is the event's exact deadline.
     void on_hblank_start(GbaBus& bus, Scheduler& scheduler, std::uint64_t timestamp,

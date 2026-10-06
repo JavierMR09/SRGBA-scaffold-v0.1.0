@@ -80,6 +80,10 @@ class GbaBus {
     void reset() noexcept;
     void initialize_post_bios() noexcept;
 
+    // Save-state serialization of all memory, IO, and attached hardware (not the BIOS or ROM).
+    void save_state(StateWriter& writer) const;
+    void load_state(StateReader& reader);
+
     [[nodiscard]] bool load_bios(const std::filesystem::path& path,
                                  std::string& error_message) noexcept;
     [[nodiscard]] bool load_bios(std::span<const std::uint8_t> bytes,
@@ -174,7 +178,6 @@ class GbaBus {
 
     [[nodiscard]] static Region region_for(std::uint32_t address) noexcept;
     [[nodiscard]] static std::size_t vram_offset(std::uint32_t address) noexcept;
-    [[nodiscard]] static std::uint32_t crc32(std::span<const std::uint8_t> bytes) noexcept;
 
     // Direct pointers into plain memory for aligned 16/32-bit accesses (nullptr when the access
     // needs the general path: BIOS, IO, SRAM, unmapped space, or past the end of the ROM).
