@@ -132,6 +132,17 @@ void Emulator::run_frame() noexcept {
     }
 }
 
+void Emulator::advance_frame() noexcept {
+    if (state_ != RunState::Paused) {
+        return;
+    }
+    state_ = RunState::Running;
+    run_frame();
+    if (state_ == RunState::Running) {
+        state_ = RunState::Paused;
+    }
+}
+
 std::filesystem::path Emulator::game_file_path(const std::string_view extension) const {
     if (!cartridge_) {
         return {};

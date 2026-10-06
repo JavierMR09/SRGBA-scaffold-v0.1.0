@@ -98,6 +98,8 @@ class Emulator {
     void reset() noexcept;
     // Runs until the next frame boundary (280,896 master cycles per frame, ~59.73 Hz).
     void run_frame() noexcept;
+    // Frame advance: runs exactly one frame while paused, then stays paused.
+    void advance_frame() noexcept;
     // Executes one instruction, or skips one halted span up to the next hardware event.
     [[nodiscard]] std::optional<ExecutionResult> step_instruction() noexcept;
     // Moves the audio generated so far (interleaved stereo int16 at Apu::kSampleRate) into

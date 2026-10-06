@@ -29,12 +29,14 @@ add_library(
     src/core/backup.cpp
     src/core/cartridge.cpp
     src/core/cheats.cpp
+    src/core/display_filter.cpp
     src/core/dma.cpp
     src/core/emulator.cpp
     src/core/gba_bus.cpp
     src/core/hle_bios.cpp
     src/core/ppu.cpp
     src/core/rewind.cpp
+    src/core/rom_library.cpp
     src/core/save_file.cpp
     src/core/system_bios.cpp
     src/core/timers.cpp
@@ -155,6 +157,7 @@ if(SRGBA_BUILD_TESTS)
         tests/backup_tests.cpp
         tests/cheat_tests.cpp
         tests/demo_rom_tests.cpp
+        tests/display_library_tests.cpp
         tests/emulator_tests.cpp
         tests/gba_bus_tests.cpp
         tests/hle_bios_tests.cpp
