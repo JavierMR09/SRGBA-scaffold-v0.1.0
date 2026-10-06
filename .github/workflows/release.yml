@@ -17,7 +17,7 @@ jobs:
         working-directory: SRGBA
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Configure
         run: >-
